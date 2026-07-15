@@ -1,0 +1,39 @@
+# ===========================================================
+# Render.com Deployment Config - AI Stock Scanner V8.1.2
+# ===========================================================
+# Is codebase ka run_full_day_scheduler() (scheduler.py) ek BLOCKING
+# `while True` loop hai jo poore din chalta rehta hai. Health server
+# (health_server.py) isi process ke andar ek ALAG background thread
+# mein chalta hai, taaki Render isse ek normal "web service" (jo HTTP
+# par respond karti hai) samjhe aur kabhi sleep na kare.
+
+services:
+  - type: web
+    name: ai-stock-scanner-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py --schedule
+
+    # Render health check - health_server.py ka /ping endpoint
+    healthCheckPath: /ping
+
+    plan: free   # Free tier - UptimeRobot se /ping karwate rehna zaroori hai
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: RENDER
+        value: "true"
+      - key: PORT
+        value: "8080"
+      - key: SELF_PING_MINUTES
+        value: "10"
+      - key: TZ
+        value: "Asia/Kolkata"
+
+      # ⚠️ Ye sensitive values Render Dashboard mein set karo (yahan
+      # is file mein NAHI - .yaml files git mein commit hoti hain):
+      #   TELEGRAM_BOT_TOKEN
+      #   TELEGRAM_CHAT_ID
+      #   RENDER_EXTERNAL_URL   (apna Render app ka URL, deploy hone
+      #                          ke baad Render khud dikhata hai)

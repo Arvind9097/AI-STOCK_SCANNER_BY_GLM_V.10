@@ -1,33 +1,24 @@
-# ═══════════════════════════════════════════════════════════════
-# AI Stock Scanner V9.2 — Complete Dependencies
-# ═══════════════════════════════════════════════════════════════
-# Install: pip install -r requirements.txt
-# ═══════════════════════════════════════════════════════════════
+pandas
+numpy
+yfinance==0.2.54
+openpyxl
+matplotlib
+reportlab
+requests
+deep-translator
+python-dotenv
 
-# ─── Core Data Processing ───
-pandas>=2.0.0               # DataFrame operations (OHLCV data)
-numpy>=1.24.0               # Array math (candle colors, volumes)
+# --- V8.2.0: Breaking news (RSS feeds) ---
+feedparser
 
-# ─── Network & API (Module 1) ───
-requests>=2.28.0            # HTTP client (NSE fetcher, GLM API)
-tenacity>=8.0.0             # Exponential backoff retry (429 handling)
-yfinance>=0.2.40            # Fallback data source (cloud-reliable)
+# --- V8.2.0: Render 24x7 health server (/ping for UptimeRobot) ---
+flask
+gunicorn
 
-# ─── News Filtering (Module 2) ───
-# (No external deps — uses stdlib re, html, unicodedata, hashlib)
+# --- V8.2.0 Update: Additional free NSE data source (no auth needed) ---
+jugaad-data
+nse[server]
 
-# ─── Chart Generation (Module 3) ───
-matplotlib>=3.7.0           # Candlestick + EMA + volume rendering
-Pillow>=9.0.0               # PNG image verification (optional)
-
-# ─── Strategy Engine (Module 4) ───
-# (No external deps — uses pandas + numpy)
-
-# ─── PDF Reports (Module 5) ───
-reportlab>=4.0.0            # PDF generation with TTF Unicode font support
-
-# ─── Scheduler (Master Controller) ───
-schedule>=1.2.0             # Cron-like daily job scheduling
-
-# ─── Timezone Support ───
-tzdata>=2023.3              # ZoneInfo timezone data (Windows compat)
+# --- V8.2.0: ZoneInfo timezone data (Windows par stdlib tzdata nahi hota;
+# Linux/Mac par bhi harmless. IST timezone ke liye zaroori) ---
+tzdata

@@ -1,0 +1,19 @@
+# Secrets - kabhi commit mat karo
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data (auto-generate hoti hai, repo mein nahi chahiye)
+*.db
+logs/*.log
+data/*.json
+charts/*.png
+reports/*.pdf
+nse_cache/
+
+# OS/Editor
+.DS_Store
+.vscode/
