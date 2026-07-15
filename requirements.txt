@@ -1,0 +1,33 @@
+# ═══════════════════════════════════════════════════════════════
+# AI Stock Scanner V9.2 — Complete Dependencies
+# ═══════════════════════════════════════════════════════════════
+# Install: pip install -r requirements.txt
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Core Data Processing ───
+pandas>=2.0.0               # DataFrame operations (OHLCV data)
+numpy>=1.24.0               # Array math (candle colors, volumes)
+
+# ─── Network & API (Module 1) ───
+requests>=2.28.0            # HTTP client (NSE fetcher, GLM API)
+tenacity>=8.0.0             # Exponential backoff retry (429 handling)
+yfinance>=0.2.40            # Fallback data source (cloud-reliable)
+
+# ─── News Filtering (Module 2) ───
+# (No external deps — uses stdlib re, html, unicodedata, hashlib)
+
+# ─── Chart Generation (Module 3) ───
+matplotlib>=3.7.0           # Candlestick + EMA + volume rendering
+Pillow>=9.0.0               # PNG image verification (optional)
+
+# ─── Strategy Engine (Module 4) ───
+# (No external deps — uses pandas + numpy)
+
+# ─── PDF Reports (Module 5) ───
+reportlab>=4.0.0            # PDF generation with TTF Unicode font support
+
+# ─── Scheduler (Master Controller) ───
+schedule>=1.2.0             # Cron-like daily job scheduling
+
+# ─── Timezone Support ───
+tzdata>=2023.3              # ZoneInfo timezone data (Windows compat)
