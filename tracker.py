@@ -901,3 +901,159 @@ def get_day_stats():
         "swing_picks": picks_list,
         "btst_picks": [],
     }
+
+# ═══════════════════════════════════════════════════════════════════
+# V9.3: TRAILING STOPLOSS + 9 EMA EXIT LOGIC
+# ═══════════════════════════════════════════════════════════════════
+
+def calculate_trailing_stoploss(entry_price, current_close, atr, multiplier=2.0):
+    """
+    V9.3: Trailing stoploss calculate karta hai.
+
+    Trailing SL = max(previous SL, current_close - ATR × multiplier)
+    Matlab SL hamesha price ke saath upar move karta hai (never goes down).
+
+    Args:
+        entry_price: Original entry price
+        current_close: Current closing price
+        atr: Current ATR value
+        multiplier: ATR multiplier (default 2.0 = 2× ATR below price)
+
+    Returns:
+        dict: {
+            "trailing_sl": float,      # new trailing SL level
+            "sl_pct_from_close": float, # SL % below current close
+            "profit_pct": float,        # current profit %
+            "should_exit": bool,        # price below trailing SL?
+        }
+    """
+    try:
+        if not all([entry_price, current_close, atr]) or atr <= 0:
+            return None
+
+        # Trailing SL = close - (ATR × multiplier)
+        new_sl = current_close - (atr * multiplier)
+
+        # SL never goes below original entry - (ATR × multiplier)
+        # (initial SL stays, trailing only moves UP)
+        initial_sl = entry_price - (atr * multiplier)
+        trailing_sl = max(new_sl, initial_sl)
+
+        # Exit signal: price below trailing SL
+        should_exit = current_close < trailing_sl
+
+        profit_pct = ((current_close - entry_price) / entry_price) * 100
+        sl_pct = ((current_close - trailing_sl) / current_close) * 100
+
+        return {
+            "trailing_sl": round(trailing_sl, 2),
+            "sl_pct_from_close": round(sl_pct, 2),
+            "profit_pct": round(profit_pct, 2),
+            "should_exit": should_exit,
+        }
+    except Exception as e:
+        logger.warning(f"Trailing SL calc error: {e}")
+        return None
+
+
+def check_9ema_exit(df_weekly=None, df_monthly=None):
+    """
+    V9.3: 9 EMA exit check on weekly/monthly candle.
+
+    EXIT CONDITION: Weekly ya Monthly close 9 EMA se neeche break kare.
+    This is a longer-term exit signal (swing/positional trades ke liye).
+
+    Args:
+        df_weekly: Weekly OHLCV DataFrame (optional)
+        df_monthly: Monthly OHLCV DataFrame (optional)
+
+    Returns:
+        dict: {
+            "exit_signal": bool,       # True = exit karo
+            "exit_reason": str,        # "Weekly 9 EMA broken" etc
+            "weekly_9ema": float,      # weekly 9 EMA value
+            "weekly_close": float,     # last weekly close
+            "monthly_9ema": float,     # monthly 9 EMA value
+            "monthly_close": float,    # last monthly close
+        }
+    """
+    result = {
+        "exit_signal": False,
+        "exit_reason": "",
+        "weekly_9ema": None,
+        "weekly_close": None,
+        "monthly_9ema": None,
+        "monthly_close": None,
+    }
+
+    try:
+        # Check Weekly 9 EMA
+        if df_weekly is not None and len(df_weekly) >= 9:
+            weekly_ema9 = df_weekly["Close"].ewm(span=9, adjust=False).mean()
+            last_weekly_ema = float(weekly_ema9.iloc[-1])
+            last_weekly_close = float(df_weekly["Close"].iloc[-1])
+
+            result["weekly_9ema"] = round(last_weekly_ema, 2)
+            result["weekly_close"] = round(last_weekly_close, 2)
+
+            if last_weekly_close < last_weekly_ema:
+                result["exit_signal"] = True
+                result["exit_reason"] = "Weekly close below 9 EMA (exit signal)"
+                return result
+
+        # Check Monthly 9 EMA
+        if df_monthly is not None and len(df_monthly) >= 9:
+            monthly_ema9 = df_monthly["Close"].ewm(span=9, adjust=False).mean()
+            last_monthly_ema = float(monthly_ema9.iloc[-1])
+            last_monthly_close = float(df_monthly["Close"].iloc[-1])
+
+            result["monthly_9ema"] = round(last_monthly_ema, 2)
+            result["monthly_close"] = round(last_monthly_close, 2)
+
+            if last_monthly_close < last_monthly_ema:
+                result["exit_signal"] = True
+                result["exit_reason"] = "Monthly close below 9 EMA (exit signal)"
+                return result
+
+        if not result["exit_signal"]:
+            result["exit_reason"] = "No exit signal — above 9 EMA on weekly/monthly"
+
+    except Exception as e:
+        logger.warning(f"9 EMA exit check error: {e}")
+        result["exit_reason"] = f"Check failed: {e}"
+
+    return result
+
+
+def format_exit_alert(stock, trailing_info, ema_exit_info):
+    """
+    V9.3: Exit alert message Telegram ke liye format karta hai.
+
+    Args:
+        stock: Stock symbol
+        trailing_info: dict from calculate_trailing_stoploss()
+        ema_exit_info: dict from check_9ema_exit()
+
+    Returns:
+        HTML-formatted string for Telegram.
+    """
+    from utils import escape_html, clean_symbol
+    display = escape_html(clean_symbol(stock))
+
+    lines = [f"🚪 <b>EXIT ALERT</b> — <b>{display}</b>"]
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    if trailing_info:
+        lines.append(f"📊 Trailing SL: ₹{trailing_info['trailing_sl']}")
+        lines.append(f"📈 Profit: {trailing_info['profit_pct']:+.2f}%")
+        if trailing_info.get("should_exit"):
+            lines.append("⚠️ Price below trailing SL — EXIT NOW!")
+
+    if ema_exit_info:
+        if ema_exit_info.get("exit_signal"):
+            lines.append(f"📉 {ema_exit_info['exit_reason']}")
+        if ema_exit_info.get("weekly_9ema"):
+            lines.append(f"📅 Weekly 9 EMA: ₹{ema_exit_info['weekly_9ema']}")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)

@@ -1149,6 +1149,198 @@ def _build_disclaimer():
 
 
 # ---------------------------------------------------------------
+# V9.4: FUNDAMENTAL CHECKLIST REPORT SECTION
+# ---------------------------------------------------------------
+def _build_fundamental_checklist_section(top_stocks_data):
+    """
+    V9.4: Fundamental checklist report for all BUY signal stocks.
+    Shows pass/fail per condition + overall rating.
+    """
+    story = []
+    story.append(_section_header("FUNDAMENTAL CHECKLIST REPORT", "📊"))
+    story.append(Spacer(1, 8))
+
+    # Intro text
+    intro_style = ParagraphStyle(
+        'ChecklistIntro', fontName=BODY_FONT, fontSize=10,
+        leading=14, textColor=COL_TEXT_MUTED, alignment=TA_JUSTIFY,
+    )
+    story.append(Paragraph(
+        "Is section mein har BUY signal stock ka fundamental verification hai. "
+        "10 conditions check ki gayi hain — P/E, Debt, Book Value, Quarterly/Yearly "
+        "Growth, ROE. Rating A+ (excellent) se D (weak) tak.",
+        intro_style,
+    ))
+    story.append(Spacer(1, 12))
+
+    try:
+        from fundamental_analyzer import FundamentalAnalyzer, format_fundamental_checklist
+        analyzer = FundamentalAnalyzer()
+
+        for data in top_stocks_data[:10]:  # max 10 stocks
+            symbol = data.get('symbol', '')
+            if not symbol:
+                continue
+
+            # Add .NS suffix if not present
+            if not symbol.endswith('.NS') and not symbol.endswith('.BO'):
+                symbol = f"{symbol}.NS"
+
+            try:
+                result = analyzer.analyze(symbol)
+                result_dict = result.to_dict()
+
+                # Build checklist table for this stock
+                story.extend(_build_single_fundamental_checklist(symbol, result_dict))
+                story.append(Spacer(1, 10))
+
+            except Exception as e:
+                logger.warning(f"Fundamental checklist fail {symbol}: {e}")
+                story.append(Paragraph(
+                    f"<b>{symbol}</b>: Fundamental data fetch fail ({e})",
+                    intro_style,
+                ))
+                story.append(Spacer(1, 6))
+
+    except ImportError:
+        story.append(Paragraph(
+            "<i>Fundamental Analyzer module not available.</i>",
+            intro_style,
+        ))
+
+    return story
+
+
+def _build_single_fundamental_checklist(symbol, result_dict):
+    """Build a single stock's fundamental checklist table."""
+    from utils import clean_symbol, escape_html as _esc
+
+    flowables = []
+    display = _esc(clean_symbol(symbol))
+    rating = result_dict.get("overall_rating", "N/A")
+    score = result_dict.get("fundamental_score", 0)
+    pass_count = result_dict.get("pass_count", 0)
+    fail_count = result_dict.get("fail_count", 0)
+    company = _esc(result_dict.get("company_name", ""))
+
+    # Rating color
+    rating_colors = {
+        "A+": colors.HexColor("#2E7D32"),
+        "A": colors.HexColor("#388E3C"),
+        "B": colors.HexColor("#F57F17"),
+        "C": colors.HexColor("#E65100"),
+        "D": colors.HexColor("#C62828"),
+        "N/A": colors.HexColor("#757575"),
+    }
+    rating_color = rating_colors.get(rating, colors.HexColor("#757575"))
+
+    # Stock header with rating
+    header_style = ParagraphStyle(
+        'FundHeader', fontName=BODY_FONT_BOLD, fontSize=13,
+        leading=16, textColor=colors.white, alignment=TA_LEFT,
+    )
+    header_data = [[
+        Paragraph(f"<b>{display}</b> — {company}", header_style),
+        Paragraph(f'<font color="white"><b>Rating: {rating}</b></font>',
+                  ParagraphStyle('Rate', fontName=BODY_FONT_BOLD, fontSize=14,
+                                 leading=18, textColor=colors.white, alignment=TA_CENTER)),
+    ]]
+    header_tbl = Table(header_data, colWidths=[400, 130])
+    header_tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, 0), COL_HEADER_BG),
+        ('BACKGROUND', (1, 0), (1, 0), rating_color),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+    ]))
+    flowables.append(header_tbl)
+    flowables.append(Spacer(1, 4))
+
+    # Summary line
+    summary_style = ParagraphStyle(
+        'FundSummary', fontName=BODY_FONT, fontSize=9,
+        leading=12, textColor=COL_TEXT_MUTED,
+    )
+    flowables.append(Paragraph(
+        f"Score: {score}/100 | Pass: {pass_count} | Fail: {fail_count}",
+        summary_style,
+    ))
+    flowables.append(Spacer(1, 6))
+
+    # Checklist table
+    check_style = ParagraphStyle(
+        'CheckCell', fontName=BODY_FONT, fontSize=9,
+        leading=12, textColor=COL_TEXT,
+    )
+    check_bold = ParagraphStyle(
+        'CheckBold', fontName=BODY_FONT_BOLD, fontSize=9,
+        leading=12, textColor=COL_TEXT,
+    )
+
+    # Table header
+    table_data = [[
+        Paragraph("<b>Check</b>", ParagraphStyle('TH', fontName=BODY_FONT_BOLD,
+                   fontSize=9, leading=12, textColor=colors.white, alignment=TA_CENTER)),
+        Paragraph("<b>Condition</b>", ParagraphStyle('TH', fontName=BODY_FONT_BOLD,
+                   fontSize=9, leading=12, textColor=colors.white, alignment=TA_CENTER)),
+        Paragraph("<b>Value</b>", ParagraphStyle('TH', fontName=BODY_FONT_BOLD,
+                   fontSize=9, leading=12, textColor=colors.white, alignment=TA_CENTER)),
+        Paragraph("<b>Result</b>", ParagraphStyle('TH', fontName=BODY_FONT_BOLD,
+                   fontSize=9, leading=12, textColor=colors.white, alignment=TA_CENTER)),
+    ]]
+
+    for check in result_dict.get("checks", []):
+        name = _esc(check.get("name", ""))
+        condition = _esc(check.get("condition", ""))
+        value = _esc(str(check.get("value", "")))
+        passed = check.get("passed", False)
+
+        if value == "N/A":
+            result_text = "N/A"
+            result_color = colors.HexColor("#9E9E9E")
+        elif passed:
+            result_text = "PASS"
+            result_color = colors.HexColor("#2E7D32")
+        else:
+            result_text = "FAIL"
+            result_color = colors.HexColor("#C62828")
+
+        result_para = Paragraph(
+            f'<font color="{result_color.hexval()}"><b>{result_text}</b></font>',
+            ParagraphStyle('Res', fontName=BODY_FONT_BOLD, fontSize=10,
+                           leading=13, alignment=TA_CENTER),
+        )
+
+        table_data.append([
+            Paragraph(name, check_bold),
+            Paragraph(condition, check_style),
+            Paragraph(value, check_style),
+            result_para,
+        ])
+
+    if len(table_data) > 1:
+        checklist_tbl = Table(table_data, colWidths=[140, 130, 120, 60])
+        style_cmds = [
+            ('BACKGROUND', (0, 0), (-1, 0), COL_HEADER_BG),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.3, COL_BORDER),
+        ]
+        # Alternating row colors
+        for i in range(1, len(table_data)):
+            if i % 2 == 0:
+                style_cmds.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#F5F5F5")))
+        checklist_tbl.setStyle(TableStyle(style_cmds))
+        flowables.append(checklist_tbl)
+
+    flowables.append(Spacer(1, 8))
+    return flowables
+
+
+# ---------------------------------------------------------------
 # MAIN PDF GENERATOR (V8.3.0 — Master AI Trading Dashboard)
 # ---------------------------------------------------------------
 def generate_pdf_report(top_stocks_data, output_path, glm_picks=None, breadth=None):
@@ -1216,6 +1408,11 @@ def generate_pdf_report(top_stocks_data, output_path, glm_picks=None, breadth=No
             sym = data.get('symbol', '')
             glm_pick = glm_lookup.get(sym)
             story.extend(_build_stock_card(idx, data, glm_pick_for_stock=glm_pick))
+
+    # ---- 4.5 Fundamental Checklist Report (V9.4) ----
+    if top_stocks_data:
+        story.append(PageBreak())
+        story.extend(_build_fundamental_checklist_section(top_stocks_data))
 
     # ---- 5. Disclaimer page ----
     story.extend(_build_disclaimer())

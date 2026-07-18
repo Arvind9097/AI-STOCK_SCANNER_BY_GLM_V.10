@@ -58,37 +58,34 @@ _SYSTEM_PROMPT = (
 
 
 def _call_glm(user_question, context_text):
-    """GLM API call karta hai. Return: reply text ya None."""
+    """GLM API call karta hai with retry + rate limiting. Return: reply text ya None."""
     if not ZAI_API_KEY:
         return None
     try:
-        import requests
+        # V9.1.1: glm_retry.call_glm_with_retry() use karta hai — exponential
+        # backoff on 429 (5s->10s->20s->40s->80s, max 5 attempts) + 2s rate
+        # limiter (prevents burst 429 jab user turant-turat stocks query kare).
+        # Pehle raw requests.post tha jo 429 par seedha fail ho jaata tha.
+        from glm_retry import call_glm_with_retry
+
         url = f"{ZAI_API_BASE.rstrip('/')}/chat/completions"
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": f"CONTEXT:\n{context_text}\n\nUSER KA SAWAL: {user_question}"},
         ]
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {ZAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": ZAI_MODEL,
-                "messages": messages,
-                "max_tokens": AI_BRAIN_MAX_TOKENS,
-                "temperature": 0.6,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            return None
-        text = choices[0].get("message", {}).get("content", "")
-        return (text or "").strip() or None
+        headers = {
+            "Authorization": f"Bearer {ZAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": ZAI_MODEL,
+            "messages": messages,
+            "max_tokens": AI_BRAIN_MAX_TOKENS,
+            "temperature": 0.6,
+        }
+
+        text = call_glm_with_retry(url, headers, payload, timeout=30)
+        return text  # already stripped, or None on failure
     except Exception as e:
         logger.warning(f"AI Brain GLM call fail: {e}")
         return None

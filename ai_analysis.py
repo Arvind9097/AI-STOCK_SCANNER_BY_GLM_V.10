@@ -128,36 +128,26 @@ def _glm_api_analysis(row):
             f"Score: {row['Score']}/100, Signal: {row['Signal']}"
         )
 
-        # Z.AI API OpenAI-compatible hai. Bearer token auth.
+        # V9.1.1: glm_retry.call_glm_with_retry() — exponential backoff on
+        # 429 + 2s rate limiter. Pehle raw requests.post tha jo 429 par
+        # directly fail ho jaata tha (500-stock scan mein rate-limit common).
+        from glm_retry import call_glm_with_retry
+
         url = f"{ZAI_API_BASE.rstrip('/')}/chat/completions"
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {ZAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": ZAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 300,
-                "temperature": 0.7,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        headers = {
+            "Authorization": f"Bearer {ZAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": ZAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 300,
+            "temperature": 0.7,
+        }
 
-        # OpenAI-compatible response format:
-        # {"choices": [{"message": {"content": "..."}}], ...}
-        choices = data.get("choices") or []
-        if not choices:
-            logger.warning(f"{row['Stock']}: GLM API ne khaali choices return kiya, rule-based use kar raha hoon")
-            return _rule_based_analysis(row)
-
-        text = choices[0].get("message", {}).get("content", "")
-        text = (text or "").strip()
+        text = call_glm_with_retry(url, headers, payload, timeout=30)
         if not text:
-            logger.warning(f"{row['Stock']}: GLM API ne khaali content return kiya, rule-based use kar raha hoon")
+            logger.warning(f"{row['Stock']}: GLM API fail (429/5xx after retries ya client error), rule-based use kar raha hoon")
             return _rule_based_analysis(row)
 
         return text

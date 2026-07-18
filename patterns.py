@@ -163,6 +163,153 @@ def detect_flag(df, lookback=FLAG_LOOKBACK, pole_min_move=FLAG_POLE_MIN_MOVE_PCT
     return None
 
 
+# ───────────────────────────────────────────────────────────────────
+# V9.3: CUP AND HANDLE PATTERN + BREAKOUT RETEST + HIGH BREAKOUT
+# ───────────────────────────────────────────────────────────────────
+
+def detect_cup_and_handle(df, lookback=30, cup_depth_pct=12.0, handle_depth_pct=5.0):
+    """
+    V9.3: Cup and Handle pattern detect karta hai.
+
+    CUP: U-shaped bottom (left rim → bottom → right rim)
+    HANDLE: Small pullback after right rim (tight consolidation)
+    BREAKOUT: Close above rim = pattern complete (BUY signal)
+    """
+    try:
+        import numpy as np
+        if len(df) < lookback:
+            return None
+
+        recent = df.tail(lookback).reset_index(drop=True)
+        highs = recent["High"].values
+        lows = recent["Low"].values
+        closes = recent["Close"].values
+
+        third = len(recent) // 3
+        if third < 3:
+            return None
+
+        left_rim_idx = int(np.argmax(highs[:third]))
+        left_rim = highs[left_rim_idx]
+
+        cup_bottom_idx = left_rim_idx + int(np.argmin(lows[left_rim_idx:2*third]))
+        cup_bottom = lows[cup_bottom_idx]
+
+        if left_rim > 0:
+            cup_depth = (left_rim - cup_bottom) / left_rim * 100
+            if cup_depth < cup_depth_pct:
+                return {"found": False, "rim_level": round(left_rim, 2),
+                        "cup_bottom": round(cup_bottom, 2)}
+        else:
+            return None
+
+        right_section = closes[cup_bottom_idx:]
+        right_rim_idx = None
+        for i, c in enumerate(right_section):
+            if c >= left_rim * 0.97:
+                right_rim_idx = cup_bottom_idx + i
+                break
+
+        if right_rim_idx is None:
+            return {"found": False, "rim_level": round(left_rim, 2),
+                    "cup_bottom": round(cup_bottom, 2)}
+
+        right_rim = highs[right_rim_idx]
+        rim_level = (left_rim + right_rim) / 2
+
+        handle_section = recent.iloc[right_rim_idx:]
+        if len(handle_section) < 2:
+            return {"found": False, "rim_level": round(rim_level, 2),
+                    "cup_bottom": round(cup_bottom, 2)}
+
+        handle_low = float(handle_section["Low"].min())
+        handle_high = float(handle_section["High"].max())
+
+        if rim_level > 0:
+            handle_depth = (rim_level - handle_low) / rim_level * 100
+            if handle_depth > handle_depth_pct:
+                return {"found": False, "rim_level": round(rim_level, 2),
+                        "cup_bottom": round(cup_bottom, 2)}
+        else:
+            handle_depth = 0
+
+        current_close = closes[-1]
+        breakout = current_close > rim_level
+
+        retest_count = 0
+        for i in range(right_rim_idx, len(recent)):
+            if abs(recent["High"].iloc[i] - rim_level) / rim_level * 100 < 1.5:
+                retest_count += 1
+
+        found = breakout or handle_depth < handle_depth_pct
+
+        return {
+            "found": found,
+            "rim_level": round(rim_level, 2),
+            "cup_bottom": round(cup_bottom, 2),
+            "handle_low": round(handle_low, 2),
+            "breakout": breakout,
+            "retest_count": retest_count,
+            "cup_depth_pct": round((left_rim - cup_bottom) / left_rim * 100, 1) if left_rim > 0 else 0,
+            "handle_depth_pct": round(handle_depth, 1),
+        }
+
+    except Exception as e:
+        logger.debug(f"Cup and Handle detection error: {e}")
+        return None
+
+
+def check_breakout_levels(df):
+    """
+    V9.3: Check if current price is breaking 6-month / 52-week / all-time high.
+    Also checks retest count + tight range at resistance.
+    """
+    try:
+        if len(df) < 20:
+            return None
+
+        current_close = float(df["Close"].iloc[-1])
+
+        six_month_data = df.tail(125) if len(df) >= 125 else df
+        six_month_high = float(six_month_data["High"].max())
+        breaks_6mo = current_close >= six_month_high * 0.99
+
+        if len(df) >= 250:
+            week52_high = float(df.tail(250)["High"].max())
+        else:
+            week52_high = float(df["High"].max())
+        breaks_52wk = current_close >= week52_high * 0.99
+
+        alltime_high = float(df["High"].max())
+        breaks_alltime = current_close >= alltime_high * 0.99
+
+        retest_count = 0
+        six_month_section = six_month_data.tail(30)
+        for _, row in six_month_section.iterrows():
+            if abs(row["High"] - six_month_high) / six_month_high * 100 < 1.5:
+                retest_count += 1
+
+        last_5 = df.tail(5)
+        range_pct = (last_5["High"].max() - last_5["Low"].min()) / current_close * 100
+        tight_range = range_pct < 3.0
+
+        return {
+            "breaks_6month_high": breaks_6mo,
+            "breaks_52week_high": breaks_52wk,
+            "breaks_alltime_high": breaks_alltime,
+            "6month_high": round(six_month_high, 2),
+            "52week_high": round(week52_high, 2),
+            "alltime_high": round(alltime_high, 2),
+            "retest_count": retest_count,
+            "tight_range_at_resistance": tight_range,
+            "range_pct": round(range_pct, 2),
+        }
+
+    except Exception as e:
+        logger.debug(f"Breakout level check error: {e}")
+        return None
+
+
 def detect_all_patterns(df):
     """
     Master function - df (indicators already added) leke saare
@@ -203,11 +350,28 @@ def detect_all_patterns(df):
         # actual bugs trace kiye ja sakein.
         logger.debug(f"Pattern detection error (graceful skip): {e}")
 
-    bullish_patterns = {"Double Bottom", "Bull Flag"}
+    bullish_patterns = {"Double Bottom", "Bull Flag", "Cup and Handle"}
     bearish_patterns = {"Double Top", "Head & Shoulders", "Bear Flag"}
+
+    # V9.3: Add Cup and Handle detection
+    try:
+        ch = detect_cup_and_handle(df)
+        if ch and ch.get("found"):
+            detected.append("Cup and Handle")
+    except Exception as e:
+        logger.debug(f"Cup&Handle detection error: {e}")
+
+    # V9.3: Add breakout level info (6-month / 52-week / all-time high)
+    breakout_info = None
+    try:
+        breakout_info = check_breakout_levels(df)
+    except Exception as e:
+        logger.debug(f"Breakout check error: {e}")
 
     return {
         "patterns": detected,
         "bullish": any(p in bullish_patterns for p in detected),
         "bearish": any(p in bearish_patterns for p in detected),
+        "cup_and_handle": ch if ch else None,
+        "breakout_levels": breakout_info,
     }

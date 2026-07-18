@@ -110,30 +110,27 @@ def _build_prompt(candidates):
 
 
 def _call_glm(prompt):
-    """Z.AI GLM API ko call karta hai. Returns raw text response or None."""
+    """
+    Z.AI GLM API ko call karta hai with retry + rate limiting.
+    V9.1.1: glm_retry.call_glm_with_retry() — exponential backoff on
+    429 (5s->10s->20s->40s->80s) + 2s rate limiter.
+    """
     try:
-        import requests
+        from glm_retry import call_glm_with_retry
+
         url = f"{ZAI_API_BASE.rstrip('/')}/chat/completions"
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {ZAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": ZAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 2500,
-                "temperature": 0.4,  # kam temperature = consistent JSON
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            return None
-        return choices[0].get("message", {}).get("content", "")
+        headers = {
+            "Authorization": f"Bearer {ZAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": ZAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2500,
+            "temperature": 0.4,  # low temp = consistent JSON
+        }
+
+        return call_glm_with_retry(url, headers, payload, timeout=60)
     except Exception as e:
         logger.warning(f"GLM screener API call fail: {e}")
         return None
@@ -164,20 +161,47 @@ def _extract_json(text):
 def _fallback_ranking(candidates, top_n):
     """
     GLM unavailable hone par technical score se hi top-N return karta hai.
-    GLM fields (rationale, confidence, action) empty rehte hain.
+    V9.4 FIX: confidence ab technical score se derive hota hai (N/A nahi).
+    Technical score 0-100 ko confidence 0-10 scale mein convert karte hain.
     """
     sorted_cands = sorted(candidates, key=lambda c: c.get("score", 0), reverse=True)
     out = []
     for i, c in enumerate(sorted_cands[:top_n], 1):
+        tech_score = c.get("score", 0)
+        # Convert technical score (0-100) to confidence (0-10 scale)
+        # Score 80+ → confidence 8+, Score 60+ → confidence 6+, etc.
+        confidence = round(min(tech_score / 10.0, 10.0), 1)
+
+        # Action based on technical score
+        if tech_score >= 80:
+            action = "ENTER_NOW"
+        elif tech_score >= 60:
+            action = "ENTER_NOW"
+        elif tech_score >= 40:
+            action = "WAIT"
+        else:
+            action = "AVOID"
+
+        # Rationale from technical indicators
+        signal = c.get("signal", "")
+        rsi = c.get("rsi", "N/A")
+        adx = c.get("adx", "N/A")
+        rr = c.get("rr", "N/A")
+        rationale = (
+            f"Technical score {tech_score}/100 ({signal}). "
+            f"RSI: {rsi}, ADX: {adx}, R:R: 1:{rr}. "
+            f"GLM AI unavailable — technical-based ranking."
+        )
+
         out.append({
             "stock": c["symbol"],
             "name": c.get("name", ""),
             "rank": i,
-            "glm_confidence": None,
-            "glm_action": None,
-            "glm_rationale": "",
-            "glm_risk_note": "",
-            "technical_score": c.get("score", 0),
+            "glm_confidence": confidence,
+            "glm_action": action,
+            "glm_rationale": rationale,
+            "glm_risk_note": "GLM AI unavailable — verify manually",
+            "technical_score": tech_score,
             "technical_signal": c.get("signal", ""),
         })
     return out

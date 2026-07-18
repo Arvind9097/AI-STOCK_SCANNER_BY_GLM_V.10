@@ -181,6 +181,21 @@ def run_full_day_scheduler(scan_func, monitor_func, report_func, nifty_func, clo
                 "closebuys": None, "evening": None, "intraday": None, "btst": None,
                 "swing_digest": None}
 
+    # V9.4: Weekend skip — Saturday (5) / Sunday (6) par market closed
+    # hai. Scan/intraday/BTST/monitor SIRF weekdays pe chalenge.
+    # Morning briefing + Evening report weekend pe bhi chalega (news
+    # + summary useful hai).
+    def _is_weekend():
+        """Return True if today is Saturday (5) or Sunday (6)."""
+        return now.weekday() >= 5
+
+    def _is_market_day():
+        """Weekend check — market scan jobs ke liye."""
+        if _is_weekend():
+            logger.debug(f"Weekend ({now.strftime('%A')}) — market scan skip")
+            return False
+        return True
+
     # V8.2.0: har job-key ke liye ek alag thread chalao - main loop
     # block nahi hoga, aur do same-key jobs same din mein overlap nahi
     # karenge (last_run guard). Different keys (e.g. 9:20 scan + 9:30
@@ -215,19 +230,33 @@ def run_full_day_scheduler(scan_func, monitor_func, report_func, nifty_func, clo
                 _dispatch("nifty", nifty_func, "Morning Briefing")
                 last_run["nifty"] = today
 
+            # V9.2: Upstox token check — 15 min before scan (9:05 AM)
+            # Agar token expire/missing → Telegram login alert bhej do
+            if hhmm >= "09:05" and last_run.get("upstox_check") != today:
+                try:
+                    from upstox_fetcher import check_token_and_alert, UPSTOX_API_KEY
+                    if UPSTOX_API_KEY:  # only if Upstox configured
+                        check_token_and_alert()
+                except Exception as e:
+                    logger.debug(f"Upstox token check skip: {e}")
+                last_run["upstox_check"] = today
+
             if hhmm >= SCHEDULE_TIME and last_run["scan"] != today:
-                logger.info("Scheduled: morning scan")
-                _dispatch("scan", scan_func, "Swing Scan")
+                if _is_market_day():  # V9.4: weekend skip
+                    logger.info("Scheduled: morning scan")
+                    _dispatch("scan", scan_func, "Swing Scan")
                 last_run["scan"] = today
 
             if intraday_func and hhmm >= INTRADAY_SCAN_TIME and last_run["intraday"] != today:
-                logger.info("Scheduled: intraday scan (ORB/VWAP/RVOL)")
-                _dispatch("intraday", intraday_func, "Intraday")
+                if _is_market_day():  # V9.4: weekend skip
+                    logger.info("Scheduled: intraday scan (ORB/VWAP/RVOL)")
+                    _dispatch("intraday", intraday_func, "Intraday")
                 last_run["intraday"] = today
 
             if swing_digest_func and hhmm >= SWING_CHART_DIGEST_TIME and last_run["swing_digest"] != today:
-                logger.info("Scheduled: Swing Trading chart digest")
-                _dispatch("swing_digest", swing_digest_func, "Swing Digest")
+                if _is_market_day():  # V9.4: weekend skip
+                    logger.info("Scheduled: Swing Trading chart digest")
+                    _dispatch("swing_digest", swing_digest_func, "Swing Digest")
                 last_run["swing_digest"] = today
 
             # V8.2.0 NOTE: monitor ke liye `>=` ka use nahi kiya - kyunki
@@ -238,18 +267,21 @@ def run_full_day_scheduler(scan_func, monitor_func, report_func, nifty_func, clo
             if MONITOR_START_TIME <= hhmm <= MONITOR_END_TIME:
                 minute_key = f"{today}_{now.hour}_{now.minute // MONITOR_INTERVAL_MIN}"
                 if last_run["monitor"] != minute_key:
-                    logger.info("Scheduled: live monitor check")
-                    _dispatch("monitor", monitor_func, "Monitor")
+                    if _is_market_day():  # V9.4: weekend skip
+                        logger.info("Scheduled: live monitor check")
+                        _dispatch("monitor", monitor_func, "Monitor")
                     last_run["monitor"] = minute_key
 
             if closebuys_func and hhmm >= CLOSE_BESTBUYS_TIME and last_run["closebuys"] != today:
-                logger.info("Scheduled: best buys into close (3pm)")
-                _dispatch("closebuys", closebuys_func, "Close-Buys")
+                if _is_market_day():  # V9.4: weekend skip
+                    logger.info("Scheduled: best buys into close (3pm)")
+                    _dispatch("closebuys", closebuys_func, "Close-Buys")
                 last_run["closebuys"] = today
 
             if btst_func and hhmm >= BTST_SCAN_TIME and last_run["btst"] != today:
-                logger.info("Scheduled: BTST scan (last-hour price action)")
-                _dispatch("btst", btst_func, "BTST")
+                if _is_market_day():  # V9.4: weekend skip
+                    logger.info("Scheduled: BTST scan (last-hour price action)")
+                    _dispatch("btst", btst_func, "BTST")
                 last_run["btst"] = today
 
             # V8.2.0: DAILY_SUMMARY_TIME (16:00) se PEHLE BTST/CLOSEBUYS

@@ -50,6 +50,28 @@ CUSTOM_STOCKS = [
 
 NIFTY500_LOCAL_CSV = "data/nifty500.csv"
 
+# V9.1.3: NSE ALL STOCKS CSV (user-uploaded)
+# User ek CSV file upload karta hai jisme sabhi NSE listed stocks hain
+# (~7000 symbols). Ye file data/ folder mein rakhi jaati hai.
+# Code is CSV ko PRIMARY source maanta hai — NSE archives (jo cloud
+# par block hoti hain) ki zaroorat nahi padti.
+#
+# CSV FORMAT:
+#   - Column "Symbol" hona chahiye (case-insensitive)
+#   - Symbols bina .NS suffix ke (e.g. "RELIANCE", "TCS", "INFY")
+#   - Code automatically .NS suffix add kar deta hai
+#   - Example CSV row: RELIANCE, TCS, INFY, ...
+#
+# CSV kaise upload karein:
+#   1. NSE website se EQUITY_L.csv download karo
+#   2. Usse data/nse_all_stocks.csv naam se save karo
+#   3. Git push karo — Render par permanently available
+#   4. Ya Render Shell se directly upload karo
+#
+# Agar CSV nahi hai, to code fallback chain use karega:
+#   NSE archives → static_universe → CUSTOM_STOCKS
+NSE_ALL_STOCKS_CSV = "data/nse_all_stocks.csv"
+
 # -----------------------------------------------------------
 # DATA DOWNLOAD SETTINGS
 # -----------------------------------------------------------
@@ -164,19 +186,30 @@ TELEGRAM_BOT_TOKEN = _env_or("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = _env_or("TELEGRAM_CHAT_ID", "")
 TELEGRAM_SEND_CHARTS = True
 
+# V9.1.2 FIX: Pehle ye config import par sys.exit(1) hota tha agar token
+# missing tha. Problem: Render cold start par health server bhi start nahi
+# hota tha → /ping respond nahi karta → UptimeRobot fail → Render restart
+# loop mein aa jaata tha.
+#
+# Ab sirf warning print karte hain (no sys.exit). Token missing hone par:
+#   - Health server start hoga (Render /ping respond karega)
+#   - Bot listener warning log karega + skip ho jayega
+#   - Scheduler + breaking news + scans bhi chaleinge (Telegram bhejna skip)
+# Isse Render restart loop se bach jaate hain.
 if not TELEGRAM_BOT_TOKEN:
     import sys
     print(
         "\n"
-        "❌ FATAL: TELEGRAM_BOT_TOKEN environment variable set nahi hai.\n"
+        "⚠️  WARNING: TELEGRAM_BOT_TOKEN environment variable set nahi hai.\n"
+        "   Telegram alerts/bot DISABLED rahega jab tak token set nahi hota.\n"
         "   .env file mein (ya Render Dashboard -> Environment mein) ye daalo:\n"
         "       TELEGRAM_BOT_TOKEN=<aapka_naya_bot_token>\n"
         "       TELEGRAM_CHAT_ID=<aapka_group/channel_id>\n"
-        "   (Purana hardcoded token security ke liye V8.1.2 mein hamesha ke\n"
-        "    liye hata diya gaya hai kyunki wo pehle plaintext leak ho chuka tha.)\n",
+        "   (Health server + scheduler phir bhi chalenge — /ping respond karega.)\n",
         file=sys.stderr,
     )
-    sys.exit(1)
+    # V9.1.2: NO sys.exit(1) — health server start hone do, Render restart loop se bachao
+    # Bot listener + Telegram alerts disable rahenge jab tak token set nahi hota
 
 # -----------------------------------------------------------
 # AI ANALYSIS SETTINGS
@@ -313,7 +346,7 @@ INTRADAY_TOP_N_RESULTS = 5             # Telegram par top kitne dikhaane hain
 # wala) se ALAG hai - wo unchanged hai. Ye naya scanner specifically
 # "pichle 1 ghante ka price action + volume accumulation + Day's
 # High ke paas closing" check karta hai (document ki exact requirement).
-BTST_SCAN_TIME = "15:00"  # V9.0: 3:05 -> 3:00 (user request)
+BTST_SCAN_TIME = "15:10"  # V9.3: 3:05 -> 3:10 (user request)
 BTST_SCAN_ENABLED = True
 BTST_LOOKBACK_MINUTES = 60             # document: "last 1 hour (2:00 PM - 3:00 PM)"
 BTST_DAY_HIGH_PROXIMITY_PCT = 1.5      # Close, Day's High ke kitne % andar hona chahiye
@@ -399,8 +432,8 @@ AI_BRAIN_MAX_TOKENS = 600  # reply length control (cost)
 #                      ~1300 symbols. Scan time ~10-15 min.
 #   "FULL"            — poore NSE + BSE (7000+ symbols).
 #                      Scan time ~40-60 min. Comprehensive lekin slow.
-UNIVERSE_MODE = "FAST"
-UNIVERSE_MAX_SYMBOLS = 1300        # FAST mode cap (FULL mode ignores this)
+UNIVERSE_MODE = "FULL"
+UNIVERSE_MAX_SYMBOLS = 7000         # V9.1.3: FULL mode — saare NSE stocks (CSV se)
 
 # Stage-1 quick filter (scanner.py mein): in criteria se neeche wale
 # stocks full indicator scan se pehle hi skip ho jaate hain. Isse
@@ -420,3 +453,36 @@ UNIVERSE_MIN_AVG_VOLUME_LAKH = 5   # daily avg volume < 5 lakh skip (illiquid)
 # top-N (Score se sorted) use hota hai (V8.2.0 jaisa behavior).
 GLM_SCREENER_ENABLED = True
 GLM_SCREEN_TOP_N = 8              # Telegram/PDF par kitne GLM picks dikhane
+
+# -----------------------------------------------------------
+# V9.2: UPSTOX API SETTINGS (OAuth Telegram Login Flow)
+# -----------------------------------------------------------
+# Upstox se 7000+ stocks ka data 2-3 min mein (vs Yahoo 40 min).
+# Login flow: Telegram alert → click link → Upstox login → auto token.
+#
+# Environment variables (Render → Environment tab):
+#   UPSTOX_API_KEY       = your-api-key
+#   UPSTOX_API_SECRET    = your-api-secret
+#   UPSTOX_REDIRECT_URI  = https://your-app.onrender.com/upstox/callback
+#
+# Token auto-expires har 24 hours. Scheduler 9:05 AM check karta hai,
+# agar token missing hai to Telegram pe login link bhejta hai.
+UPSTOX_ENABLED = True  # Set False to disable Upstox (use Yahoo fallback)
+
+# -----------------------------------------------------------
+# V9.3: GEMINI AI FALLBACK (GLM fail hone par auto-switch)
+# -----------------------------------------------------------
+# Jab GLM API 429/error de, to automatically Gemini AI pe
+# switch ho jaata hai. Gemini 1.5 Flash (fast + cheap).
+#
+# Environment variable (Render → Environment):
+#   GEMINI_API_KEY = your-gemini-api-key
+#
+# Flow: GLM → fail → Gemini → fail → rule-based
+GEMINI_API_KEY = _env_or("GEMINI_API_KEY", "")
+GEMINI_MODEL = _env_or("GEMINI_MODEL", "gemini-1.5-flash")
+
+# V9.3: TRAILING STOPLOSS + 9 EMA EXIT settings
+TRAILING_SL_ATR_MULTIPLIER = 2.0    # SL = close - (ATR × 2.0)
+EXIT_ON_9EMA_WEEKLY = True          # Exit if weekly close < 9 EMA
+EXIT_ON_9EMA_MONTHLY = True         # Exit if monthly close < 9 EMA

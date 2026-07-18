@@ -201,6 +201,48 @@ def create_health_app(bot_version="V8.2.0", extra_status_fn=None):
                 base["status_error"] = str(e)
         return jsonify(base), 200
 
+    # V9.2: Upstox OAuth callback endpoint
+    # User clicks login link in Telegram → Upstox login → redirects here
+    @app.route("/upstox/callback")
+    def upstox_callback():
+        """Receive OAuth auth code from Upstox, exchange for access token."""
+        from flask import request, redirect as flask_redirect
+        auth_code = request.args.get("code")
+        state = request.args.get("state", "")
+
+        if not auth_code:
+            return "<h2>❌ Login Failed</h2><p>No authorization code received.</p>", 400
+
+        try:
+            from upstox_fetcher import exchange_code_for_token
+            success = exchange_code_for_token(auth_code)
+            if success:
+                logger.info("✅ Upstox OAuth callback: token obtained successfully!")
+                return (
+                    "<h2>✅ Login Successful!</h2>"
+                    "<p>Upstox access token saved. Data fetch is now active.</p>"
+                    "<p>You can close this page. Token valid for 24 hours.</p>"
+                    '<p><a href="/">Back to app</a></p>'
+                ), 200
+            else:
+                return (
+                    "<h2>❌ Token Exchange Failed</h2>"
+                    "<p>Could not exchange code for token. Check API Key/Secret.</p>"
+                ), 500
+        except Exception as e:
+            logger.error(f"Upstox callback error: {e}")
+            return f"<h2>❌ Error</h2><p>{e}</p>", 500
+
+    # V9.2: Upstox token status endpoint
+    @app.route("/upstox/status")
+    def upstox_status():
+        """Check Upstox token status."""
+        try:
+            from upstox_fetcher import get_token_status
+            return jsonify(get_token_status()), 200
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     return app
 
 

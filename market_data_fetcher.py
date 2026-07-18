@@ -621,16 +621,35 @@ def _period_to_days(period):
 def fetch_daily_ohlcv(symbol, period="1y"):
     """
     Ek symbol ke liye daily OHLCV DataFrame deta hai, priority chain
-    ke saath. V8.3.2 mein Yahoo Direct API PRIORITY #1 banaya gaya
-    (cloud par sabse reliable). NSE sources cloud IPs par block hote
-    hain, isliye unhe baad mein try karte hain.
+    ke saath. V9.2 mein Upstox API PRIORITY #1 banaya gaya
+    (sabse fast + reliable, 25 req/sec). Agar Upstox token missing,
+    to Yahoo Direct fallback.
 
-    Priority: Yahoo Direct -> NSE Chart -> nse-package -> Stooq ->
-              jugaad-data -> yfinance-lib
+    Priority: Upstox API -> Yahoo Direct -> NSE Chart -> nse-package ->
+              Stooq -> jugaad-data -> yfinance-lib
 
     Return: DataFrame [Date, Open, High, Low, Close, Volume] ya None.
     """
-    # V8.3.2: Yahoo Direct API — cloud par SABSE RELIABLE. Browser
+    # V9.2: UPSTOX API — PRIORITY #1 (fastest, 25 req/sec, no cloud block)
+    # Token required (OAuth login via Telegram). Agar token missing,
+    # silently skip to Yahoo Direct (no crash).
+    try:
+        from upstox_fetcher import fetch_historical_data, is_token_valid, UPSTOX_API_KEY
+        if UPSTOX_API_KEY and is_token_valid():
+            # Symbol se .NS suffix hatao (Upstox bina suffix chahiye)
+            clean_sym = symbol.replace(".NS", "").replace(".BO", "")
+            # Index symbols skip karo (Upstox sirf equities)
+            if not clean_sym.startswith("^"):
+                days_map = {"1d": 3, "5d": 8, "1mo": 35, "3mo": 95,
+                            "6mo": 185, "1y": 370, "2y": 740, "5y": 1830}
+                days = days_map.get(period, 370)
+                df = fetch_historical_data(clean_sym, days=days)
+                if df is not None and not df.empty:
+                    return df
+    except Exception as e:
+        logger.debug(f"Upstox fetch fail for {symbol}: {e}")
+
+    # V8.3.2: Yahoo Direct API — cloud par SABSE RELIABLE fallback. Browser
     # headers ke saath NSE-block aur yfinance-rate-limit dono se
     # bachata hai. Index symbols (^NSEI) bhi isse mil jaate hain.
     df = _fetch_yahoo_direct(symbol, period)

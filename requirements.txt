@@ -1,6 +1,7 @@
 pandas
 numpy
-yfinance==0.2.54
+# V9.1.2 FIX: yfinance 0.2.54 -> >=0.2.58 (multi-index DataFrame bugs fixed)
+yfinance>=0.2.58
 openpyxl
 matplotlib
 reportlab
@@ -16,9 +17,14 @@ flask
 gunicorn
 
 # --- V8.2.0 Update: Additional free NSE data source (no auth needed) ---
+# V9.1.2 FIX: nse[server] extra optional hai aur Render par install fail
+# kar sakta hai. Safe version: plain nse package (no extras).
 jugaad-data
-nse[server]
+nse
 
 # --- V8.2.0: ZoneInfo timezone data (Windows par stdlib tzdata nahi hota;
 # Linux/Mac par bhi harmless. IST timezone ke liye zaroori) ---
 tzdata
+
+# --- V9.1.1: GLM API retry (exponential backoff for 429 handling) ---
+tenacity

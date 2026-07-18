@@ -45,6 +45,7 @@ from config import (
     NIFTY500_LOCAL_CSV, CUSTOM_STOCKS,
     UNIVERSE_MODE, UNIVERSE_MAX_SYMBOLS,
     UNIVERSE_MIN_PRICE, UNIVERSE_MIN_AVG_VOLUME_LAKH,
+    NSE_ALL_STOCKS_CSV,
 )
 from nse_session import get_nse_session, invalidate_nse_session
 from logger import logger
@@ -220,6 +221,70 @@ def _apply_liquidity_filter(symbols_meta):
     return filtered
 
 
+def _load_user_csv():
+    """
+    V9.1.3: User-uploaded CSV se sabhi NSE stocks load karta hai.
+
+    CSV file path: data/nse_all_stocks.csv (config.py mein NSE_ALL_STOCKS_CSV)
+
+    CSV FORMAT (flexible — multiple formats supported):
+      - Column "Symbol" (case-insensitive) — most common NSE format
+      - Ya first column agar header nahi hai
+      - Symbols bina .NS suffix ke (e.g. "RELIANCE", "TCS")
+      - Code automatically .NS suffix add kar deta hai
+
+    Returns: list of {"symbol": "RELIANCE", "name": "", "series": "EQ", "exchange": "NSE"}
+    Empty list if CSV not found or error.
+    """
+    import os
+    if not os.path.exists(NSE_ALL_STOCKS_CSV):
+        return []
+
+    try:
+        import pandas as pd
+        df = pd.read_csv(NSE_ALL_STOCKS_CSV)
+
+        # Find Symbol column (case-insensitive)
+        sym_col = None
+        for col in df.columns:
+            if col.strip().lower() in ("symbol", "symbols", "ticker", "security symbol", "nse symbol"):
+                sym_col = col
+                break
+
+        if sym_col is None:
+            # Use first column as symbol
+            sym_col = df.columns[0]
+
+        # Also try to find company name column
+        name_col = None
+        for col in df.columns:
+            if col.strip().lower() in ("name", "company", "company name", "companyname",
+                                        "name of company", "security name"):
+                name_col = col
+                break
+
+        symbols = df[sym_col].dropna().astype(str).str.strip()
+        symbols = symbols[symbols != ""]  # remove empty strings
+
+        out = []
+        for idx, sym in symbols.items():
+            # Clean symbol: remove .NS suffix if already present, strip whitespace
+            sym = sym.upper().replace(".NS", "").replace(".BO", "").strip()
+            # Skip if not alphanumeric (filter out header rows, junk)
+            if not sym or not sym[0].isalpha():
+                continue
+            name = ""
+            if name_col is not None:
+                name = str(df.loc[idx, name_col]).strip() if idx in df.index else ""
+            out.append({"symbol": sym, "name": name, "series": "EQ", "exchange": "NSE"})
+
+        logger.info(f"📁 User CSV ({NSE_ALL_STOCKS_CSV}): {len(out)} NSE stocks loaded")
+        return out
+    except Exception as e:
+        logger.warning(f"User CSV load fail ({NSE_ALL_STOCKS_CSV}): {e}")
+        return []
+
+
 def get_stock_universe():
     """
     MAIN ENTRY: unified NSE + BSE symbol list return karta hai.
@@ -230,11 +295,13 @@ def get_stock_universe():
     Caching: process-lifetime cache — ek hi run mein dobara call
     hone par cache se milta hai (network call nahi).
 
-    Fallback chain:
+    V9.1.3 PRIORITY CHAIN (CSV first!):
+      0. User CSV (data/nse_all_stocks.csv) — PRIMARY, ~7000 stocks
       1. NSE archives (equity + nifty500 + niftytotalmarket)
       2. BSE scrip list
       3. Local CSV cache (data/nifty500.csv)
-      4. CUSTOM_STOCKS (config.py — last resort, scan kam se kam chale)
+      4. Static universe (embedded ~385 stocks)
+      5. CUSTOM_STOCKS (config.py — last resort, 10 stocks)
     """
     global _universe_cache
     with _universe_cache_lock:
@@ -243,39 +310,41 @@ def get_stock_universe():
 
         all_meta = []
 
-        # 1. NSE sources (3 CSVs — equity list is most comprehensive)
-        nse_equity = _fetch_nse_equity_list()
-        if not nse_equity:
-            # Fallback: nifty500 + niftytotalmarket (agar EQUITY_L block ho)
-            nse_equity = _fetch_nse_index_list(NSE_NIFTY500_CSV_URL, "nifty500")
-            nse_equity += _fetch_nse_index_list(NSE_NIFTY_TOTAL_CSV_URL, "niftytotalmarket")
-        all_meta.extend(nse_equity)
+        # 0. V9.1.3: USER CSV (PRIMARY — no network needed, always available)
+        user_csv_stocks = _load_user_csv()
+        if user_csv_stocks:
+            all_meta = user_csv_stocks
+            logger.info(f"✅ User CSV se {len(all_meta)} stocks use ho rahe hain (PRIMARY source)")
+        else:
+            logger.info("User CSV nahi mili — live NSE/BSE sources try karte hain")
 
-        # 2. BSE source
-        bse = _fetch_bse_scrip_list()
-        all_meta.extend(bse)
+            # 1. NSE sources (3 CSVs — equity list is most comprehensive)
+            nse_equity = _fetch_nse_equity_list()
+            if not nse_equity:
+                nse_equity = _fetch_nse_index_list(NSE_NIFTY500_CSV_URL, "nifty500")
+                nse_equity += _fetch_nse_index_list(NSE_NIFTY_TOTAL_CSV_URL, "niftytotalmarket")
+            all_meta.extend(nse_equity)
 
-        # 3. Fallback: local CSV
-        if not all_meta:
-            local = _load_local_nifty500_csv()
-            all_meta.extend(local)
+            # 2. BSE source
+            bse = _fetch_bse_scrip_list()
+            all_meta.extend(bse)
 
-        # 4. Last resort: static embedded list (V8.3.3)
-        # Cloud par NSE archives BLOCK ho jaata hai (403). Local CSV bhi
-        # nahi hoti. CUSTOM_STOCKS sirf 10 stocks hain (bahut kam). Isliye
-        # static_universe.py mein NIFTY 500 + BSE top ~600 stocks embedded
-        # hain — ye hamesha available, no network needed.
-        if not all_meta:
-            logger.warning("Sab live sources fail — STATIC universe use ho raha hai (NIFTY500+BSE embedded)")
-            try:
-                from static_universe import get_static_universe
-                all_meta = get_static_universe()
-            except ImportError:
-                # static_universe.py nahi mila — last resort CUSTOM_STOCKS
-                logger.warning("static_universe import fail — CUSTOM_STOCKS use ho raha hai")
-                all_meta = [{"symbol": s.replace(".NS", "").replace(".BO", ""),
-                             "name": "", "series": "EQ", "exchange": "NSE"}
-                            for s in CUSTOM_STOCKS]
+            # 3. Fallback: local CSV
+            if not all_meta:
+                local = _load_local_nifty500_csv()
+                all_meta.extend(local)
+
+            # 4. Last resort: static embedded list (V8.3.3)
+            if not all_meta:
+                logger.warning("Sab live sources fail — STATIC universe use ho raha hai (NIFTY500+BSE embedded)")
+                try:
+                    from static_universe import get_static_universe
+                    all_meta = get_static_universe()
+                except ImportError:
+                    logger.warning("static_universe import fail — CUSTOM_STOCKS use ho raha hai")
+                    all_meta = [{"symbol": s.replace(".NS", "").replace(".BO", ""),
+                                 "name": "", "series": "EQ", "exchange": "NSE"}
+                                for s in CUSTOM_STOCKS]
 
         # Liquidity filter (FAST mode) + dedup
         all_meta = _apply_liquidity_filter(all_meta)

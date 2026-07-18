@@ -279,7 +279,7 @@ def generate_chart(stock, original_df, row=None, save_dir=CHARTS_DIR, lookback_d
     os.makedirs(save_dir, exist_ok=True)
     df = original_df.copy()
 
-    # ---- Sirf 3 EMAs - koi aur overlay indicator nahi ----
+    # ---- 3 EMAs (V9.5: EMA20 wapas add kiya gaya user request par) ----
     df['EMA20']  = df['Close'].ewm(span=20,  adjust=False).mean()
     df['EMA44']  = df['Close'].ewm(span=44,  adjust=False).mean()
     df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
@@ -288,7 +288,6 @@ def generate_chart(stock, original_df, row=None, save_dir=CHARTS_DIR, lookback_d
     if df.empty:
         return None, {}
 
-    breakout_level = float(df['High'].tail(BREAKOUT_LOOKBACK).max())
     last_close = float(df['Close'].iloc[-1])
 
     fig, (ax_price, ax_vol) = plt.subplots(
@@ -304,85 +303,26 @@ def generate_chart(stock, original_df, row=None, save_dir=CHARTS_DIR, lookback_d
     # ---- 1. CANDLESTICKS (TV-style: thin wick, clean body) ----
     colors = _draw_candles(ax_price, x, df)
 
-    # ---- 2. EMAs (thin subtle lines) ----
-    ax_price.plot(x, df['EMA20'],  color=EMA20_COLOR,  linewidth=1.1,
+    # ---- 2. 3 EMAs (V9.5: EMA20 + EMA44 + EMA200, nothing else) ----
+    ax_price.plot(x, df['EMA20'],  color=EMA20_COLOR,  linewidth=1.3,
                   label='EMA 20',  zorder=4)
-    ax_price.plot(x, df['EMA44'],  color=EMA44_COLOR,  linewidth=1.1,
-                  label='EMA 44',  zorder=4)
-    ax_price.plot(x, df['EMA200'], color=EMA200_COLOR, linewidth=1.6,
-                  label='EMA 200', zorder=4)
+    ax_price.plot(x, df['EMA44'],  color=EMA44_COLOR,  linewidth=1.6,
+                  label='EMA 44 (Reversal)',  zorder=4)
+    ax_price.plot(x, df['EMA200'], color=EMA200_COLOR, linewidth=2.0,
+                  label='EMA 200 (Trend)', zorder=5)
 
-    # ---- 3. BREAKOUT level (muted dashed orange, NO right-side label) ----
-    ax_price.axhline(
-        breakout_level, color=BREAKOUT_COLOR, linestyle='--',
-        linewidth=1.2, alpha=0.65, zorder=3,
-    )
+    # V9.4: REMOVED all of these (user request — sirf EMA rakhna hai):
+    # - Breakout level line
+    # - Entry zone shading
+    # - Stop Loss line
+    # - Target 1/2/3 lines
+    # - Support line
+    # - Resistance line
+    # - Trade plan box
 
-    # ---- 4. TRADE PLAN LEVELS (from scanner.py row - single source of truth) ----
-    plan_lines = []
-    signal = None
-    if row:
-        entry      = row.get("Entry")
-        entry_low  = row.get("Entry_Low")
-        entry_high = row.get("Entry_High")
-        sl         = row.get("Stoploss")
-        support    = row.get("Support")
-        resistance = row.get("Resistance")
-        rr         = row.get("Risk_Reward")
-        signal     = row.get("Signal")
+    signal = row.get("Signal") if row else None
 
-        t1, t2, t3 = calculate_targets(entry, sl) if (entry and sl) else (None, None, None)
-
-        # Entry zone shading (subtle visual cue, not clutter) + plan entry
-        if entry_low is not None and entry_high is not None:
-            ax_price.axhspan(entry_low, entry_high, color=ENTRY_COLOR,
-                             alpha=0.10, zorder=1)
-            plan_lines.append(("ENTRY",      f"{_fmt_price(entry_low)}–{_fmt_price(entry_high)}"))
-        elif entry is not None:
-            plan_lines.append(("ENTRY",      _fmt_price(entry)))
-
-        # Solid bold lines for SL + Targets (the "trade" — risk & reward)
-        if sl is not None:
-            ax_price.axhline(sl, color=SL_COLOR, linestyle='-',
-                             linewidth=1.5, alpha=0.95, zorder=5)
-            plan_lines.append(("STOP LOSS",  _fmt_price(sl)))
-        if t1 is not None:
-            ax_price.axhline(t1, color=TARGET_COLOR, linestyle='-',
-                             linewidth=1.4, alpha=0.90, zorder=5)
-            plan_lines.append(("TARGET 1",   _fmt_price(t1)))
-        if t2 is not None:
-            ax_price.axhline(t2, color=TARGET_COLOR, linestyle='-',
-                             linewidth=1.4, alpha=0.85, zorder=5)
-            plan_lines.append(("TARGET 2",   _fmt_price(t2)))
-        if t3 is not None:
-            ax_price.axhline(t3, color=TARGET_COLOR, linestyle='-',
-                             linewidth=1.4, alpha=0.80, zorder=5)
-            plan_lines.append(("FINAL",      _fmt_price(t3)))
-
-        # Muted dashed grey for Support / Resistance (structural, not actionable)
-        if support is not None:
-            ax_price.axhline(support, color=SUPPORT_COLOR, linestyle='--',
-                             linewidth=1.0, alpha=0.7, zorder=3)
-            plan_lines.append(("SUPPORT",    _fmt_price(support)))
-        if resistance is not None:
-            ax_price.axhline(resistance, color=RESISTANCE_COLOR, linestyle='--',
-                             linewidth=1.0, alpha=0.7, zorder=3)
-            plan_lines.append(("RESISTANCE", _fmt_price(resistance)))
-
-        # Breakout level in the plan box (no separate right-side label)
-        plan_lines.append(("BREAKOUT",   _fmt_price(breakout_level)))
-
-        # R:R row (if scanner computed it)
-        if rr:
-            try:
-                plan_lines.append(("R:R",     f"1:{float(rr):.1f}"))
-            except (TypeError, ValueError):
-                pass
-
-    # ---- 5. COMPACT TRADE-PLAN BOX (top-right) ----
-    _draw_trade_plan_box(ax_price, plan_lines)
-
-    # ---- 6. TITLE + LEGEND ----
+    # ---- 3. TITLE + LEGEND ----
     display_name = clean_symbol(stock)
     _draw_title(ax_price, display_name, last_close, signal)
     _draw_legend(ax_price)
@@ -485,7 +425,11 @@ def generate_simple_chart(stock, df, entry=None, sl=None, target=None,
         return None
 
     data = df.copy()
-    data['EMA20'] = data['Close'].ewm(span=20, adjust=False).mean()
+    # V9.5: 3 EMAs (EMA20 + EMA44 + EMA200, nothing else)
+    data['EMA20']  = data['Close'].ewm(span=20, adjust=False).mean()
+    data['EMA44']  = data['Close'].ewm(span=44, adjust=False).mean()
+    if len(data) >= 200:
+        data['EMA200'] = data['Close'].ewm(span=200, adjust=False).mean()
     data = data.dropna(subset=["Close"]).tail(lookback_days).reset_index(drop=True)
     if data.empty:
         return None
@@ -505,35 +449,16 @@ def generate_simple_chart(stock, df, entry=None, sl=None, target=None,
     # Candlesticks (thin wicks, clean bodies)
     colors = _draw_candles(ax_price, x, data)
 
-    ax_price.plot(x, data['EMA20'], color=EMA20_COLOR, linewidth=1.2,
+    # V9.5: 3 EMAs (EMA20 + EMA44 + EMA200, no trade plan lines)
+    ax_price.plot(x, data['EMA20'], color=EMA20_COLOR, linewidth=1.3,
                   label='EMA 20', zorder=4)
+    ax_price.plot(x, data['EMA44'], color=EMA44_COLOR, linewidth=1.6,
+                  label='EMA 44 (Reversal)', zorder=4)
+    if 'EMA200' in data.columns:
+        ax_price.plot(x, data['EMA200'], color=EMA200_COLOR, linewidth=2.0,
+                      label='EMA 200 (Trend)', zorder=5)
 
-    # Trade-plan lines (solid bold) + compact box
-    plan_lines = []
-    if entry is not None:
-        ax_price.axhline(entry, color=ENTRY_COLOR, linestyle='-',
-                         linewidth=1.5, alpha=0.95, zorder=5)
-        plan_lines.append(("ENTRY",     _fmt_price(entry)))
-    if sl is not None:
-        ax_price.axhline(sl, color=SL_COLOR, linestyle='-',
-                         linewidth=1.5, alpha=0.95, zorder=5)
-        plan_lines.append(("STOP LOSS", _fmt_price(sl)))
-    if target is not None:
-        ax_price.axhline(target, color=TARGET_COLOR, linestyle='-',
-                         linewidth=1.5, alpha=0.90, zorder=5)
-        plan_lines.append(("TARGET",    _fmt_price(target)))
-
-    # R:R row (intraday/BTST — derived from passed entry/sl/target)
-    if entry is not None and sl is not None and target is not None:
-        try:
-            risk = abs(entry - sl)
-            reward = abs(target - entry)
-            if risk > 0 and reward > 0:
-                plan_lines.append(("R:R",   f"1:{reward / risk:.1f}"))
-        except (TypeError, ValueError):
-            pass
-
-    _draw_trade_plan_box(ax_price, plan_lines)
+    # V9.4: REMOVED all trade plan lines + trade plan box (user request)
 
     display_name = clean_symbol(stock)
     _draw_title(ax_price, display_name, last_close, signal=None)

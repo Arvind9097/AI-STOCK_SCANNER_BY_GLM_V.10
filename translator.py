@@ -403,29 +403,25 @@ def _translate_hinglish_glm(text):
         return None  # No API key - silently fallback to placeholder technique
 
     try:
-        import requests
+        # V9.1.1: glm_retry.call_glm_with_retry() — exponential backoff on
+        # 429 + 2s rate limiter. News translation frequent ho sakta hai (har
+        # RSS poll), isliye rate-limit avoid karne ke liye retry zaroori.
+        from glm_retry import call_glm_with_retry
+
         url = f"{ZAI_API_BASE.rstrip('/')}/chat/completions"
         prompt = _GLM_HINGLISH_PROMPT.format(text=text)
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {ZAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": ZAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
-                "temperature": 0.3,  # low temp = consistent Hinglish
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            return None
-        content = choices[0].get("message", {}).get("content", "")
+        headers = {
+            "Authorization": f"Bearer {ZAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": ZAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 600,
+            "temperature": 0.3,  # low temp = consistent Hinglish
+        }
+
+        content = call_glm_with_retry(url, headers, payload, timeout=15)
         if not content:
             return None
         # Clean up: strip markdown fences agar GLM ne wrap kiya
