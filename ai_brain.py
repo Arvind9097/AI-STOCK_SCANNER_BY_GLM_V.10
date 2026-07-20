@@ -58,9 +58,16 @@ _SYSTEM_PROMPT = (
 
 
 def _call_glm(user_question, context_text):
-    """GLM API call karta hai with retry + rate limiting. Return: reply text ya None."""
-    if not ZAI_API_KEY:
-        return None
+    """GLM/Gemini API call karta hai with retry. Return: reply text ya None.
+
+    V9.9 FIX: Pehle 'if not ZAI_API_KEY: return None' guard tha jo V9.9 mein
+    Gemini ko reachable hone se rok deta tha (ZAI balance khatam, GLM hata diya).
+    glm_retry.call_glm_with_retry() ab internally Gemini route karta hai —
+    agar GEMINI_API_KEY set hai to AI Brain kaam karega bina ZAI key ke bhi.
+    """
+    from gemini_fetcher import is_gemini_available
+    if not ZAI_API_KEY and not is_gemini_available():
+        return None  # Dono keys missing — AI disabled
     try:
         # V9.1.1: glm_retry.call_glm_with_retry() use karta hai — exponential
         # backoff on 429 (5s->10s->20s->40s->80s, max 5 attempts) + 2s rate

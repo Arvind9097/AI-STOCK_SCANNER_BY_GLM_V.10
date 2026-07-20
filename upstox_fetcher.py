@@ -266,7 +266,11 @@ def fetch_historical_data(symbol: str, days: int = 365) -> Optional[Any]:
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    url = f"{UPSTOX_HISTORICAL_URL}/{instrument_key}/day/{to_date}/{from_date}"
+    # V9.9 FIX: instrument_key contains '|' (e.g. "NSE_EQ|RELIANCE").
+    # Pipe is not a valid URL path character (RFC 3986) — must be percent-encoded.
+    # Without encoding, some HTTP layers silently truncate or reject the request.
+    encoded_key = instrument_key.replace("|", "%7C")
+    url = f"{UPSTOX_HISTORICAL_URL}/{encoded_key}/day/{to_date}/{from_date}"
 
     data = _make_upstox_request(url)
     if not data or "data" not in data:
@@ -293,6 +297,10 @@ def fetch_historical_data(symbol: str, days: int = 365) -> Optional[Any]:
         return None
 
     df = pd.DataFrame(rows)
+    # V9.9 FIX: Upstox API returns candles in DESCENDING order (newest first).
+    # All downstream indicator calculations (EMA, RSI, MACD, etc.) assume
+    # ASCENDING date order — sort here before returning.
+    df = df.sort_values("Date").reset_index(drop=True)
     return df
 
 

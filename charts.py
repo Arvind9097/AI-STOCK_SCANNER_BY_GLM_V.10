@@ -382,7 +382,9 @@ def generate_chart(stock, original_df, row=None, save_dir=CHARTS_DIR, lookback_d
         'target':         row.get("Target") if row else None,
         'support':        row.get("Support") if row else None,
         'resistance':     row.get("Resistance") if row else None,
-        'breakout_level': round(breakout_level, 2),
+        # V9.4: Breakout level lines removed from chart (user request).
+        # breakout_level variable was also removed — use Resistance as proxy.
+        'breakout_level': row.get("Resistance") if row else None,
     }
     return path, metrics
 
