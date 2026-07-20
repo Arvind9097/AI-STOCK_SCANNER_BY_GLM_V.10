@@ -1,27 +1,24 @@
 """
 ===========================================================
- UPSTOX API INTEGRATION (V9.2 — OAuth Telegram Login Flow)
+ UPSTOX ANALYTICS API (V9.6 — Long-lived Token, No Daily Login)
 ===========================================================
-Upstox API v2 with OAuth 2.0 — Telegram-based login flow.
+Upstox Analytics Token: 1 साल valid, read-only, कोई OAuth/login नहीं!
 
-FLOW (user-friendly, no local script needed):
-  1. Token expires → Telegram alert: "Login link: https://..."
-  2. User clicks link → browser opens Upstox login page
-  3. User enters User ID + Password + OTP (normal login)
-  4. Upstox redirects to: https://your-app.onrender.com/upstox/callback?code=xxx
-  5. Server captures code → exchanges for access token
-  6. Token saved to data/upstox_token.json (24h valid)
-  7. All data fetches use this token → 7000 stocks in 2-3 min!
+यह OAuth flow को पूरी तरह हटाता है। बस token environment variable
+में डालो, 1 साल तक बिना re-login के data मिलेगा।
 
-SECURITY:
-  - Password/PIN NEVER stored on server (OAuth flow — user enters on Upstox)
-  - Only API Key + Secret on server (safe, just app identifiers)
-  - Access token stored locally (data/upstox_token.json), 24h expiry
+API Features:
+  - Historical daily candles (1 year+)
+  - Historical intraday candles (1min, 5min, 15min, 1hour)
+  - Live quotes (LTP)
+  - Symbol master (all NSE/BSE stocks)
+  - Read-only (safe — कोई accidental trades)
 
-RATE LIMITS (Upstox):
-  - 25 requests/second (very generous — 7000 stocks in ~5 min)
-  - Historical data: 1 year daily candles per stock
-  - No daily limit for personal use
+Rate Limit: 25 requests/second (very generous)
+
+Setup:
+  Render Environment → UPSTOX_ANALYTICS_TOKEN = <your-token>
+  बस! कोई redirect URI, OAuth, daily login नहीं।
 ===========================================================
 """
 
@@ -32,192 +29,191 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
-from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
 # ───────────────────────────────────────────────────────────────────
-# CONFIG (from environment variables — set in Render/dashboard)
+# CONFIG (from environment variables)
 # ───────────────────────────────────────────────────────────────────
+# V9.6: Analytics Token (1 year valid, no OAuth needed)
+UPSTOX_ANALYTICS_TOKEN = os.environ.get("UPSTOX_ANALYTICS_TOKEN", "")
+
+# Keep old OAuth vars for backward compat (but analytics token takes priority)
 UPSTOX_API_KEY = os.environ.get("UPSTOX_API_KEY", "")
 UPSTOX_API_SECRET = os.environ.get("UPSTOX_API_SECRET", "")
-UPSTOX_REDIRECT_URI = os.environ.get(
-    "UPSTOX_REDIRECT_URI",
-    "https://ai-stock-scanner-glm-v8-3.onrender.com/upstox/callback"
-)
 
 # Upstox API v2 endpoints
 UPSTOX_BASE = "https://api.upstox.com/v2"
-UPSTOX_AUTH_URL = "https://api.upstox.com/v2/login/authorization/dialog"
-UPSTOX_TOKEN_URL = "https://api.upstox.com/v2/login/authorization/token"
-UPSTOX_HISTORICAL_URL = "https://api.upstox.com/v2/historical/candle"
-UPSTOX_PROFILE_URL = "https://api.upstox.com/v2/user/profile"
+UPSTOX_HISTORICAL_URL = f"{UPSTOX_BASE}/historical/candle"
+UPSTOX_QUOTE_URL = f"{UPSTOX_BASE}/market-quote/ltp"
+UPSTOX_PROFILE_URL = f"{UPSTOX_BASE}/user/profile"
 
-# Token storage
+# Symbol master file URL (all NSE/BSE instruments)
+UPSTOX_SYMBOL_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz"
+
+# Token storage (for OAuth fallback — analytics token doesn't need file)
 TOKEN_FILE = os.path.join("data", "upstox_token.json")
 _token_lock = threading.Lock()
 
-# ───────────────────────────────────────────────────────────────────
-# OAUTH LOGIN FLOW
-# ───────────────────────────────────────────────────────────────────
-def get_login_url() -> str:
-    """
-    Generate Upstox OAuth login URL.
-    User clicks this → browser opens Upstox login → enters credentials + OTP
-    → Upstox redirects to our /upstox/callback endpoint with auth code.
-    """
-    params = {
-        "response_type": "code",
-        "client_id": UPSTOX_API_KEY,
-        "redirect_uri": UPSTOX_REDIRECT_URI,
-        "state": "ai_scanner_login",  # CSRF protection
-    }
-    return f"{UPSTOX_AUTH_URL}?{urlencode(params)}"
-
-
-def exchange_code_for_token(auth_code: str) -> bool:
-    """
-    Exchange OAuth authorization code for access token.
-    Called by /upstox/callback endpoint after user logs in.
-
-    Args:
-        auth_code: Code received from Upstox redirect (?code=xxx)
-
-    Returns:
-        True on success, False on failure.
-    """
-    import requests
-
-    try:
-        resp = requests.post(
-            UPSTOX_TOKEN_URL,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
-            data={
-                "code": auth_code,
-                "client_id": UPSTOX_API_KEY,
-                "client_secret": UPSTOX_API_SECRET,
-                "redirect_uri": UPSTOX_REDIRECT_URI,
-                "grant_type": "authorization_code",
-            },
-            timeout=15,
-        )
-
-        if resp.status_code != 200:
-            logger.error(f"Upstox token exchange failed: {resp.status_code} {resp.text[:200]}")
-            return False
-
-        token_data = resp.json()
-        access_token = token_data.get("access_token")
-        if not access_token:
-            logger.error(f"Upstox token exchange: no access_token in response")
-            return False
-
-        # Save token with expiry
-        expires_in = token_data.get("expires_in", 86400)  # default 24h
-        token_info = {
-            "access_token": access_token,
-            "obtained_at": datetime.now().isoformat(),
-            "expires_at": (datetime.now() + timedelta(seconds=expires_in)).isoformat(),
-            "token_type": token_data.get("token_type", "Bearer"),
-        }
-
-        _save_token(token_info)
-        logger.info("✅ Upstox access token obtained and saved successfully!")
-        return True
-
-    except Exception as e:
-        logger.error(f"Upstox token exchange error: {e}")
-        return False
+# Symbol master cache (loaded once per process)
+_symbol_master_cache = None
+_symbol_master_lock = threading.Lock()
 
 
 # ───────────────────────────────────────────────────────────────────
-# TOKEN MANAGEMENT
+# TOKEN MANAGEMENT (Analytics Token — no OAuth needed!)
 # ───────────────────────────────────────────────────────────────────
-def _save_token(token_info: dict) -> None:
-    """Atomically save token to file."""
-    from utils import atomic_write_json
-    try:
-        os.makedirs("data", exist_ok=True)
-        atomic_write_json(TOKEN_FILE, token_info)
-    except Exception as e:
-        logger.warning(f"Upstox token save fail: {e}")
-
-
-def _load_token() -> Optional[dict]:
-    """Load saved token from file."""
-    try:
-        with open(TOKEN_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    except Exception as e:
-        logger.debug(f"Upstox token load fail: {e}")
-        return None
+def is_analytics_token_available() -> bool:
+    """Check if Analytics Token is configured (1-year valid, no login needed)."""
+    return bool(UPSTOX_ANALYTICS_TOKEN)
 
 
 def get_access_token() -> Optional[str]:
     """
-    Get valid access token (from file).
-    Returns None if token expired or not found → caller should trigger login.
+    Get valid access token for API calls.
+
+    V9.6 PRIORITY:
+      1. Analytics Token (1 year valid, no login) — BEST
+      2. OAuth access token (24h, from file) — FALLBACK (old method)
+
+    Returns token string or None.
     """
+    # Priority 1: Analytics Token (no expiry check needed — 1 year valid)
+    if UPSTOX_ANALYTICS_TOKEN:
+        return UPSTOX_ANALYTICS_TOKEN
+
+    # Priority 2: OAuth token (old method — 24h, needs daily login)
     with _token_lock:
-        token_info = _load_token()
-        if not token_info:
-            return None
-
-        # Check expiry
         try:
+            with open(TOKEN_FILE, "r") as f:
+                token_info = json.load(f)
             expires_at = datetime.fromisoformat(token_info.get("expires_at", ""))
-            if datetime.now() >= expires_at:
-                logger.info("Upstox token expired — login required")
-                return None
-        except (ValueError, TypeError):
-            return None
+            if datetime.now() < expires_at:
+                return token_info.get("access_token")
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+            pass
 
-        return token_info.get("access_token")
+    return None
 
 
 def is_token_valid() -> bool:
-    """Check if we have a valid (non-expired) token."""
+    """Check if we have a valid token (analytics or OAuth)."""
     return get_access_token() is not None
 
 
 def get_token_status() -> dict:
     """Get token status for diagnostics."""
-    token_info = _load_token()
-    if not token_info:
-        return {"status": "no_token", "message": "Login required", "login_url": get_login_url()}
-
-    try:
-        expires_at = datetime.fromisoformat(token_info.get("expires_at", ""))
-        now = datetime.now()
-        if now >= expires_at:
-            return {"status": "expired", "message": "Token expired — login required",
-                    "login_url": get_login_url()}
-        remaining = expires_at - now
-        hours_left = remaining.total_seconds() / 3600
+    if UPSTOX_ANALYTICS_TOKEN:
         return {
             "status": "valid",
-            "message": f"Token valid for {hours_left:.1f} more hours",
-            "obtained_at": token_info.get("obtained_at"),
-            "expires_at": token_info.get("expires_at"),
+            "type": "analytics",
+            "message": "Analytics Token active (1 year valid, no daily login needed)",
         }
-    except Exception:
-        return {"status": "error", "message": "Token file corrupt", "login_url": get_login_url()}
+
+    # Check OAuth token (old method)
+    try:
+        with open(TOKEN_FILE, "r") as f:
+            token_info = json.load(f)
+        expires_at = datetime.fromisoformat(token_info.get("expires_at", ""))
+        if datetime.now() < expires_at:
+            remaining = expires_at - datetime.now()
+            hours_left = remaining.total_seconds() / 3600
+            return {
+                "status": "valid",
+                "type": "oauth",
+                "message": f"OAuth token valid for {hours_left:.1f} more hours",
+                "expires_at": token_info.get("expires_at"),
+            }
+        else:
+            return {
+                "status": "expired",
+                "type": "oauth",
+                "message": "OAuth token expired. Set UPSTOX_ANALYTICS_TOKEN for 1-year access (no daily login).",
+            }
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        return {
+            "status": "no_token",
+            "type": "none",
+            "message": "No token. Set UPSTOX_ANALYTICS_TOKEN env var (1 year valid, no login needed).",
+        }
+
+
+# ───────────────────────────────────────────────────────────────────
+# SYMBOL MASTER (all NSE/BSE instruments)
+# ───────────────────────────────────────────────────────────────────
+def _load_symbol_master() -> Optional[List[dict]]:
+    """
+    Download + cache Upstox symbol master file.
+    Contains ALL NSE/BSE listed instruments with their instrument_keys.
+
+    Returns list of instrument dicts, or None on failure.
+    """
+    global _symbol_master_cache
+
+    if _symbol_master_cache is not None:
+        return _symbol_master_cache
+
+    with _symbol_master_lock:
+        if _symbol_master_cache is not None:
+            return _symbol_master_cache
+
+        try:
+            import requests
+            logger.info("Downloading Upstox symbol master file...")
+            resp = requests.get(UPSTOX_SYMBOL_MASTER_URL, timeout=30)
+            if resp.status_code != 200:
+                logger.warning(f"Symbol master download failed: {resp.status_code}")
+                return None
+
+            # Decompress gzip
+            import gzip
+            data = gzip.decompress(resp.content)
+            instruments = json.loads(data)
+
+            # Filter: only NSE_EQ (equities, not F&O/debt)
+            equities = [i for i in instruments if i.get("exchange") == "NSE_EQ"
+                        and i.get("segment") == "EQ"]
+            logger.info(f"Symbol master loaded: {len(equities)} NSE equities")
+            _symbol_master_cache = equities
+            return equities
+
+        except Exception as e:
+            logger.warning(f"Symbol master load fail: {e}")
+            return None
+
+
+def _get_instrument_key(symbol: str) -> Optional[str]:
+    """
+    Get Upstox instrument_key for a symbol.
+    Example: "RELIANCE" → "NSE_EQ|RELIANCE"
+
+    Returns instrument_key or None if not found.
+    """
+    master = _load_symbol_master()
+    if not master:
+        # Fallback: construct key directly (works for most NSE equities)
+        clean = symbol.replace(".NS", "").replace(".BO", "").upper()
+        return f"NSE_EQ|{clean}"
+
+    clean = symbol.replace(".NS", "").replace(".BO", "").upper()
+    for inst in master:
+        if inst.get("tradingsymbol", "").upper() == clean:
+            return inst.get("instrument_key")
+
+    # Fallback
+    return f"NSE_EQ|{clean}"
 
 
 # ───────────────────────────────────────────────────────────────────
 # DATA FETCHING
 # ───────────────────────────────────────────────────────────────────
 def _make_upstox_request(url: str, params: dict = None) -> Optional[dict]:
-    """Make authenticated request to Upstox API."""
+    """Make authenticated request to Upstox API using Analytics Token."""
     import requests
+
     token = get_access_token()
     if not token:
-        logger.warning("Upstox: no valid token — skipping API call")
+        logger.debug("Upstox: no valid token — skipping API call")
         return None
 
     try:
@@ -230,12 +226,18 @@ def _make_upstox_request(url: str, params: dict = None) -> Optional[dict]:
             params=params,
             timeout=15,
         )
+
         if resp.status_code == 401:
-            logger.warning("Upstox: token unauthorized (expired?) — login required")
+            logger.warning("Upstox: token unauthorized (expired?) — check UPSTOX_ANALYTICS_TOKEN")
+            return None
+        if resp.status_code == 429:
+            logger.debug("Upstox: rate limited (429) — backing off")
+            time.sleep(1)
             return None
         if resp.status_code != 200:
             logger.debug(f"Upstox API {resp.status_code}: {resp.text[:200]}")
             return None
+
         return resp.json()
     except Exception as e:
         logger.debug(f"Upstox API error: {e}")
@@ -244,31 +246,29 @@ def _make_upstox_request(url: str, params: dict = None) -> Optional[dict]:
 
 def fetch_historical_data(symbol: str, days: int = 365) -> Optional[Any]:
     """
-    Fetch historical OHLCV data for a single stock from Upstox.
+    Fetch historical OHLCV daily candles for a stock from Upstox.
 
     Args:
-        symbol: NSE symbol WITHOUT .NS suffix (e.g. "RELIANCE")
-        days: Number of days of history (default 365 = 1 year)
+        symbol: NSE symbol (e.g. "RELIANCE" or "RELIANCE.NS")
+        days: Number of days of history (default 365)
 
     Returns:
         pandas DataFrame [Date, Open, High, Low, Close, Volume] or None.
     """
     import pandas as pd
 
-    # Upstox uses instrument_key format: "NSE_EQ|RELIANCE"
-    instrument_key = f"NSE_EQ|{symbol}"
+    instrument_key = _get_instrument_key(symbol)
+    if not instrument_key:
+        return None
 
-    # Calculate date range
+    # Upstox historical candle API:
+    # GET /v2/historical/candle/{instrument_key}/day/{to_date}/{from_date}
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    url = f"{UPSTOX_HISTORICAL_URL}/{instrument_key}/day"
-    params = {
-        "from": from_date,
-        "to": to_date,
-    }
+    url = f"{UPSTOX_HISTORICAL_URL}/{instrument_key}/day/{to_date}/{from_date}"
 
-    data = _make_upstox_request(url, params)
+    data = _make_upstox_request(url)
     if not data or "data" not in data:
         return None
 
@@ -276,7 +276,7 @@ def fetch_historical_data(symbol: str, days: int = 365) -> Optional[Any]:
     if not candles:
         return None
 
-    # Parse candles: [[timestamp, open, high, low, close, volume], ...]
+    # Parse candles: [[timestamp, open, high, low, close, volume, ...], ...]
     rows = []
     for candle in candles:
         if len(candle) >= 6:
@@ -301,13 +301,14 @@ def fetch_batch_historical(symbols: List[str], days: int = 365) -> Dict[str, Any
     Fetch historical data for multiple stocks (sequential, 25 req/sec limit).
 
     Args:
-        symbols: List of NSE symbols (without .NS suffix)
+        symbols: List of NSE symbols (with or without .NS suffix)
         days: History days
 
     Returns:
         Dict {symbol: DataFrame} for successful fetches.
     """
     import time
+
     results = {}
     total = len(symbols)
 
@@ -315,7 +316,9 @@ def fetch_batch_historical(symbols: List[str], days: int = 365) -> Dict[str, Any
         try:
             df = fetch_historical_data(symbol, days)
             if df is not None and not df.empty:
-                results[symbol] = df
+                # Normalize symbol (add .NS if not present)
+                clean_sym = symbol.replace(".NS", "").replace(".BO", "").upper()
+                results[f"{clean_sym}.NS"] = df
         except Exception as e:
             logger.debug(f"Upstox fetch {symbol}: {e}")
 
@@ -338,17 +341,18 @@ def fetch_all_stocks_from_csv(csv_path: str = "data/nse_all_stocks.csv") -> Dict
     2. Fetches historical data for each via Upstox API
     3. Returns dict {symbol: DataFrame}
 
-    Expected speed: 7000 stocks × 0.05s = ~6 minutes (vs 40+ min on Yahoo)
+    Expected speed: 7000 stocks × 0.05s = ~6 minutes (1-year token, no login!)
     """
     import pandas as pd
 
     if not is_token_valid():
-        logger.warning("Upstox: token invalid — cannot fetch batch data. Login required.")
+        logger.warning("Upstox: token invalid — cannot fetch batch data.")
         return {}
 
     # Load symbols from CSV
     try:
         df = pd.read_csv(csv_path)
+
         # Find Symbol column
         sym_col = None
         for col in df.columns:
@@ -360,7 +364,7 @@ def fetch_all_stocks_from_csv(csv_path: str = "data/nse_all_stocks.csv") -> Dict
 
         symbols = df[sym_col].dropna().astype(str).str.strip().str.upper()
         symbols = symbols.str.replace(".NS", "").str.replace(".BO", "")
-        symbols = symbols[symbols.str[0].str.isalpha()].tolist()  # filter junk
+        symbols = symbols[symbols.str[0].str.isalpha()].tolist()
 
         logger.info(f"Upstox: fetching data for {len(symbols)} stocks from CSV...")
         return fetch_batch_historical(symbols)
@@ -370,49 +374,122 @@ def fetch_all_stocks_from_csv(csv_path: str = "data/nse_all_stocks.csv") -> Dict
         return {}
 
 
-# ───────────────────────────────────────────────────────────────────
-# TELEGRAM LOGIN ALERT
-# ───────────────────────────────────────────────────────────────────
-def send_login_alert_via_telegram() -> None:
+def get_live_price(symbol: str) -> Optional[float]:
     """
-    Send Telegram message with login link when token is expired/missing.
-    User clicks link → browser opens → logs in → token auto-saved.
-    """
-    try:
-        from telegram_alerts import send_telegram_text
-        login_url = get_login_url()
+    Get current market price (LTP) for a stock.
 
-        message = (
-            "🔔 <b>UPSTOX LOGIN REQUIRED</b> 🔔\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Upstox access token expire ho gaya hai.\n"
-            "Data fetch continue karne ke liye login karein:\n\n"
-            f'<a href="{login_url}">👉 CLICK HERE TO LOGIN</a>\n\n'
-            "Steps:\n"
-            "1. Link par click karein\n"
-            "2. Upstox User ID + Password daalein\n"
-            "3. OTP enter karein (phone par aayega)\n"
-            "4. Login complete! Token auto-save ho jayega.\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "<i>Token 24 hours ke liye valid rahega.</i>"
+    Args:
+        symbol: NSE symbol (e.g. "RELIANCE")
+
+    Returns:
+        Last traded price (float) or None.
+    """
+    instrument_key = _get_instrument_key(symbol)
+    if not instrument_key:
+        return None
+
+    url = f"{UPSTOX_QUOTE_URL}"
+    params = {"instrument_key": instrument_key}
+
+    data = _make_upstox_request(url, params)
+    if not data:
+        return None
+
+    # Response: {"data": {"NSE_EQ|RELIANCE": {"last_price": 2950.5, ...}}}
+    quote_data = data.get("data", {})
+    for key, val in quote_data.items():
+        return val.get("last_price")
+
+    return None
+
+
+# ───────────────────────────────────────────────────────────────────
+# LEGACY OAuth SUPPORT (backward compat — analytics token takes priority)
+# ───────────────────────────────────────────────────────────────────
+def get_login_url() -> str:
+    """OAuth login URL (only used if analytics token not set)."""
+    params = {
+        "response_type": "code",
+        "client_id": UPSTOX_API_KEY,
+        "redirect_uri": os.environ.get("UPSTOX_REDIRECT_URI", ""),
+        "state": "ai_scanner_login",
+    }
+    from urllib.parse import urlencode
+    return f"{UPSTOX_BASE}/login/authorization/dialog?{urlencode(params)}"
+
+
+def exchange_code_for_token(auth_code: str) -> bool:
+    """OAuth code exchange (only used if analytics token not set)."""
+    import requests
+
+    try:
+        resp = requests.post(
+            f"{UPSTOX_BASE}/login/authorization/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "code": auth_code,
+                "client_id": UPSTOX_API_KEY,
+                "client_secret": UPSTOX_API_SECRET,
+                "redirect_uri": os.environ.get("UPSTOX_REDIRECT_URI", ""),
+                "grant_type": "authorization_code",
+            },
+            timeout=15,
         )
-        send_telegram_text(message)
-        logger.info("Upstox login alert sent via Telegram")
+
+        if resp.status_code != 200:
+            return False
+
+        token_data = resp.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return False
+
+        expires_in = token_data.get("expires_in", 86400)
+        token_info = {
+            "access_token": access_token,
+            "obtained_at": datetime.now().isoformat(),
+            "expires_at": (datetime.now() + timedelta(seconds=expires_in)).isoformat(),
+        }
+
+        from utils import atomic_write_json
+        os.makedirs("data", exist_ok=True)
+        atomic_write_json(TOKEN_FILE, token_info)
+        logger.info("✅ Upstox OAuth token saved (24h valid)")
+        return True
+
     except Exception as e:
-        logger.warning(f"Failed to send Upstox login alert: {e}")
+        logger.error(f"Upstox OAuth token exchange error: {e}")
+        return False
 
 
 def check_token_and_alert() -> None:
     """
     Check if token is valid. If not, send Telegram login alert.
-    Called by scheduler periodically (e.g. before scan time).
+    V9.6: Analytics token = no alert needed (1 year valid).
+    Only alerts if using old OAuth method.
     """
+    # Analytics token — no alert needed (1 year valid)
+    if UPSTOX_ANALYTICS_TOKEN:
+        return
+
+    # OAuth token — check + alert if expired
     if not UPSTOX_API_KEY:
-        return  # Upstox not configured
+        return
 
     if is_token_valid():
-        return  # Token fine, no action
+        return
 
-    # Token expired or missing — send alert
-    logger.info("Upstox token invalid — sending Telegram login alert")
-    send_login_alert_via_telegram()
+    try:
+        from telegram_alerts import send_telegram_text
+        login_url = get_login_url()
+        message = (
+            "🔔 <b>UPSTOX LOGIN REQUIRED</b> 🔔\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "OAuth token expire ho gaya hai.\n"
+            f'<a href="{login_url}">👉 CLICK HERE TO LOGIN</a>\n\n'
+            "<i>Tip: UPSTOX_ANALYTICS_TOKEN set karo to 1 saal tak login nahi karna padega!</i>"
+        )
+        send_telegram_text(message)
+        logger.info("Upstox login alert sent (OAuth token expired)")
+    except Exception as e:
+        logger.warning(f"Failed to send Upstox login alert: {e}")

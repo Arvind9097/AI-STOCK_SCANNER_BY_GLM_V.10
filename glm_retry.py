@@ -309,25 +309,82 @@ def call_glm_with_retry(
     # Layer 1: Rate limit (prevent burst)
     _rate_limiter.wait()
 
-    # Layer 2: Retry with exponential backoff
+    # V9.6: GEMINI PRIMARY (user request — GLM ko secondary kiya gaya)
+    # Pehle Gemini try karo, agar fail ho to GLM try karo
+    try:
+        from gemini_fetcher import call_gemini_with_retry, is_gemini_available
+        if is_gemini_available():
+            # Extract prompt from GLM payload (OpenAI format)
+            messages = payload.get("messages", [])
+            system_prompt = ""
+            user_prompt = ""
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "system":
+                    system_prompt = content
+                elif role == "user":
+                    user_prompt = content
+            if not user_prompt:
+                user_prompt = system_prompt
+                system_prompt = ""
+
+            if user_prompt:
+                max_tokens = payload.get("max_tokens", 600)
+                temperature = payload.get("temperature", 0.6)
+                logger.info("🤖 Gemini AI (primary) call...")
+                gemini_result = call_gemini_with_retry(
+                    prompt=user_prompt, system_prompt=system_prompt,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+                if gemini_result:
+                    _rate_limiter.mark()
+                    logger.info("✅ Gemini AI response received")
+                    return gemini_result
+                logger.warning("Gemini failed — trying GLM fallback...")
+    except ImportError:
+        pass  # gemini_fetcher not available
+    except Exception as e:
+        logger.warning(f"Gemini primary error: {e} — trying GLM fallback...")
+
+    # Layer 2: GLM fallback (with retry)
     @_glm_retry_decorator
     def _attempt():
         result = _single_glm_call(url, headers, payload, timeout)
-        _rate_limiter.mark()  # record successful call time
+        _rate_limiter.mark()
         return result
 
     try:
-        return _attempt()
+        result = _attempt()
+        if result:
+            return result
+        # GLM returned None — try GLM-4-Flash (Turbo, faster/cheaper model)
+        logger.warning("GLM primary failed — trying GLM-4-Flash (Turbo)...")
+        turbo_payload = dict(payload)
+        turbo_payload["model"] = "glm-4-flash"
+        turbo_result = _single_glm_call(url, headers, turbo_payload, timeout)
+        if turbo_result:
+            logger.info("✅ GLM-4-Flash (Turbo) response received")
+            return turbo_result
+        return None
     except (GLMRateLimitError, GLMServerError, GLMNetworkError, GLMEmptyResponseError) as e:
-        logger.warning(f"GLM failed after {MAX_RETRY_ATTEMPTS} retries: {type(e).__name__}. Trying Gemini fallback...")
-        # V9.3: GLM fail → Gemini fallback
-        return _try_gemini_fallback(payload)
+        logger.warning(f"GLM failed: {type(e).__name__}. Trying GLM-4-Flash (Turbo)...")
+        try:
+            turbo_payload = dict(payload)
+            turbo_payload["model"] = "glm-4-flash"
+            turbo_result = _single_glm_call(url, headers, turbo_payload, timeout)
+            if turbo_result:
+                logger.info("✅ GLM-4-Flash (Turbo) response received")
+                return turbo_result
+        except Exception:
+            pass
+        return None
     except GLMClientError as e:
-        logger.warning(f"GLM client error (non-retryable): {e}. Trying Gemini fallback...")
-        return _try_gemini_fallback(payload)
+        logger.error(f"GLM client error (non-retryable): {e}")
+        return None
     except RetryError as e:
-        logger.warning(f"GLM retry exhausted: {e}. Trying Gemini fallback...")
-        return _try_gemini_fallback(payload)
+        logger.error(f"GLM retry exhausted: {e}")
+        return None
     except Exception as e:
         logger.error(f"GLM call to {url} unexpected error: {type(e).__name__}: {e}")
         return None

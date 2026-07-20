@@ -69,36 +69,28 @@ from utils import clean_symbol
 from logger import logger
 
 # -----------------------------------------------------------
-# TRADINGVIEW DARK THEME — COLOR TOKENS (V8.3.0 simplified hierarchy)
+# TRADINGVIEW DARK THEME — V9.6 (improved for TV-like look)
 # -----------------------------------------------------------
-BG_COLOR         = "#131722"   # TradingView dark background
-GRID_COLOR       = "#2a2e39"   # subtle grid
+BG_COLOR         = "#0d1117"   # TradingView dark background (darker)
+GRID_COLOR       = "#1e222d"   # subtle grid
 TEXT_COLOR       = "#d1d4dc"   # TV light-grey label text
 TEXT_DIM_COLOR   = "#787b86"   # TV dim-grey (secondary labels)
 TITLE_COLOR      = "#ffffff"
+PANEL_BG         = "#131722"   # candlestick panel background
 
-CANDLE_UP        = "#26a69a"   # TV teal (bullish)
-CANDLE_DOWN      = "#ef5350"   # TV coral red (bearish)
+CANDLE_UP        = "#089981"   # TV green (v2 — more vibrant)
+CANDLE_DOWN      = "#f23645"   # TV red (v2 — more vibrant)
+WICK_UP          = "#089981"
+WICK_DOWN        = "#f23645"
 
-# EMAs — subtle thin lines (still distinguishable)
-EMA20_COLOR      = "#f7c948"   # gold
-EMA44_COLOR      = "#f48fb1"   # pink
-EMA200_COLOR     = "#42a5f5"   # blue (slightly thicker — trend definer)
+# EMAs — TradingView style colors
+EMA20_COLOR      = "#FFD700"   # gold (bright)
+EMA44_COLOR      = "#FF6B35"   # sharp orange (reversal zone)
+EMA200_COLOR     = "#4FC3F7"   # light blue (trend baseline)
 
-# Trade-plan levels — clear bold hierarchy
-ENTRY_COLOR      = "#29b6f6"   # solid blue (entry)
-SL_COLOR         = "#ff5252"   # solid red (risk)
-TARGET_COLOR     = "#26a69a"   # solid teal-green (reward)
-SUPPORT_COLOR    = "#787b86"   # muted grey (structural)
-RESISTANCE_COLOR = "#787b86"   # muted grey (structural)
-BREAKOUT_COLOR   = "#ff9800"   # muted orange (breakout reference)
-
-# Trade-plan box styling
-BOX_BG_COLOR     = "#1a1e2a"
-BOX_BORDER_COLOR = "#2a2e39"
-
-DPI = 300
-FIG_W, FIG_H = 15, 9
+FIG_W            = 16   # wider figure for more candles
+FIG_H            = 9
+DPI              = 150  # balanced quality + speed
 
 
 # -----------------------------------------------------------
@@ -284,8 +276,15 @@ def generate_chart(stock, original_df, row=None, save_dir=CHARTS_DIR, lookback_d
     df['EMA44']  = df['Close'].ewm(span=44,  adjust=False).mean()
     df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
 
-    df = df.dropna(subset=["Close", "EMA200"]).tail(lookback_days).reset_index(drop=True)
-    if df.empty:
+    # V9.6 FIX: dropna sirf Close pe (EMA200 NaN hone par rows mat hatao).
+    # Pehle dropna(subset=["Close","EMA200"]) tha — agar stock ka data
+    # 210 days ka tha, EMA200 ke liye sirf 10 rows non-NaN, baaki sab
+    # drop ho jaate the → chart pe sirf 3-10 candles dikhte the!
+    # Ab sirf Close pe dropna, EMA200 NaN rows plot nahi hongi (matplotlib
+    # NaN skip karta hai) lekin candles + EMA20 + EMA44 sab dikhte hain.
+    df = df.dropna(subset=["Close"]).tail(lookback_days).reset_index(drop=True)
+    if df.empty or len(df) < 10:
+        logger.warning(f"{stock}: chart skip — only {len(df)} rows (need ≥10 for meaningful chart)")
         return None, {}
 
     last_close = float(df['Close'].iloc[-1])

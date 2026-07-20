@@ -392,48 +392,45 @@ def reply_to_telegram(chat_id, text_message):
 
 
 def send_inline_menu(chat_id):
-    """Button menu bhejne ke liye function (V9.0: 12 buttons, 4 rows × 3).
+    """Button menu bhejne ke liye function (V9.7: 16 buttons, 2 per row for full text visibility).
 
-    V9.0 NAYA: Pehle sirf 5 buttons the (Monitor/Report/Today/PDF/Dashboard).
-    Ab 12 buttons - har trading scenario cover karta hai:
-      Row 1: Top Picks | Live Status | Intraday Picks
-      Row 2: Swing Breakout | BTST Picks | Active Trades
-      Row 3: Target Hit | Best R:R | Latest News
-      Row 4: PDF Report | Performance Report | Master Dashboard
+    V9.7 FIX: Pehle 3 buttons per row the — Telegram pe font cut ho jaata tha.
+    Ab 2 buttons per row — har button ka pura text dikhta hai.
+    V9.7 NAYA: Market Scanners submenu (Top Gainers, 52w High, Volume, Trending).
     """
     try:
         url = BASE_URL + "sendMessage"
         payload = {
             "chat_id": chat_id,
             "text": (
-                "<b>AI Stock Scanner - Menu</b>\n\n"
-                "Aapko kya check karna hai? Niche 12 options mein se choose karo, "
-                "ya seedha natural language mein type karo - jaise \"Reliance ka analysis bhejo\" "
-                "ya \"Aaj ke top stocks kya hain?\" ('/help' se poori list milega)."
+                "<b>🤖 AI Stock Scanner — Main Menu</b>\n\n"
+                "Niche se choose karo, ya seedha type karo "
+                "(jaise \"Reliance ka analysis bhejo\")."
             ),
             "parse_mode": "HTML",
             "reply_markup": {
                 "inline_keyboard": [
-                    [
-                        {"text": "📊 Aaj ke Top Picks", "callback_data": "run_today"},
-                        {"text": "📈 Live Market Status", "callback_data": "run_livestatus"},
-                        {"text": "🔥 Intraday Picks", "callback_data": "run_intraday"},
-                    ],
-                    [
-                        {"text": "🚀 Swing Breakout", "callback_data": "run_swing"},
-                        {"text": "🌙 BTST Picks", "callback_data": "run_btst"},
-                        {"text": "📋 Active Trades", "callback_data": "run_activetrades"},
-                    ],
-                    [
-                        {"text": "🎯 Target Hit", "callback_data": "run_targethit"},
-                        {"text": "⚡ Best Risk:Reward", "callback_data": "run_bestrr"},
-                        {"text": "📰 Latest News", "callback_data": "run_news"},
-                    ],
-                    [
-                        {"text": "📄 Full PDF Report", "callback_data": "run_pdf"},
-                        {"text": "📅 Performance Report", "callback_data": "run_report"},
-                        {"text": "👑 Master Dashboard", "callback_data": "run_dashboard"},
-                    ],
+                    # Row 1: Main picks
+                    [{"text": "📊 Aaj ke Top Picks", "callback_data": "run_today"}],
+                    [{"text": "📈 Live Market Status", "callback_data": "run_livestatus"}],
+                    # Row 2: Scanners
+                    [{"text": "🔥 Intraday Picks", "callback_data": "run_intraday"}],
+                    [{"text": "🚀 Swing Breakout", "callback_data": "run_swing"}],
+                    [{"text": "🌙 BTST Picks", "callback_data": "run_btst"}],
+                    # Row 3: Market Scanners (V9.7 NAYA)
+                    [{"text": "📈🔥 Top Gainers", "callback_data": "scan_gainers"}],
+                    [{"text": "🎯 Near 52-Week High", "callback_data": "scan_52w"}],
+                    [{"text": "📊 Volume Surge", "callback_data": "scan_volume"}],
+                    [{"text": "🚀 Trending Stocks", "callback_data": "scan_trending"}],
+                    # Row 4: Trades + Reports
+                    [{"text": "📋 Active Trades", "callback_data": "run_activetrades"}],
+                    [{"text": "🎯 Target Hit Stocks", "callback_data": "run_targethit"}],
+                    [{"text": "⚡ Best Risk:Reward", "callback_data": "run_bestrr"}],
+                    # Row 5: Info
+                    [{"text": "📰 Latest News", "callback_data": "run_news"}],
+                    [{"text": "📄 Full PDF Report", "callback_data": "run_pdf"}],
+                    [{"text": "📅 Performance Report", "callback_data": "run_report"}],
+                    [{"text": "👑 Master Dashboard", "callback_data": "run_dashboard"}],
                 ]
             },
         }
@@ -872,6 +869,39 @@ def run_listener_loop():
                             reply_to_telegram(chat_id, get_latest_news_text())
                         elif callback_data == "run_livestatus":
                             reply_to_telegram(chat_id, get_nifty_trend_text())
+                        # V9.7: Market Scanners
+                        elif callback_data == "scan_gainers":
+                            reply_to_telegram(chat_id, "🔥 Top Gainers scan ho raha hai... (30 sec lagenge)")
+                            try:
+                                from market_scanners import scan_top_gainers, format_scanner_telegram
+                                results = scan_top_gainers(top_n=10)
+                                reply_to_telegram(chat_id, format_scanner_telegram("gainers", results))
+                            except Exception as e:
+                                reply_to_telegram(chat_id, f"❌ Scanner error: {e}")
+                        elif callback_data == "scan_52w":
+                            reply_to_telegram(chat_id, "🎯 Near 52-Week High scan ho raha hai...")
+                            try:
+                                from market_scanners import scan_52w_high, format_scanner_telegram
+                                results = scan_52w_high(top_n=10)
+                                reply_to_telegram(chat_id, format_scanner_telegram("52w_high", results))
+                            except Exception as e:
+                                reply_to_telegram(chat_id, f"❌ Scanner error: {e}")
+                        elif callback_data == "scan_volume":
+                            reply_to_telegram(chat_id, "📊 Volume Surge scan ho raha hai...")
+                            try:
+                                from market_scanners import scan_volume_surge, format_scanner_telegram
+                                results = scan_volume_surge(top_n=10)
+                                reply_to_telegram(chat_id, format_scanner_telegram("volume", results))
+                            except Exception as e:
+                                reply_to_telegram(chat_id, f"❌ Scanner error: {e}")
+                        elif callback_data == "scan_trending":
+                            reply_to_telegram(chat_id, "🚀 Trending Stocks scan ho raha hai...")
+                            try:
+                                from market_scanners import scan_trending, format_scanner_telegram
+                                results = scan_trending(top_n=10)
+                                reply_to_telegram(chat_id, format_scanner_telegram("trending", results))
+                            except Exception as e:
+                                reply_to_telegram(chat_id, f"❌ Scanner error: {e}")
 
                     # 2. TEXT MESSAGES (Supports both Group 'message' & Channel 'channel_post')
                     else:
