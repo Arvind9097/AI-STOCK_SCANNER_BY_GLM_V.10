@@ -92,6 +92,10 @@ FIG_W            = 16   # wider figure for more candles
 FIG_H            = 9
 DPI              = 150  # balanced quality + speed
 
+# V9.7 FIX: Box colors (were removed in V9.6 cleanup — caused chart crash)
+BOX_BG_COLOR     = "#1a1e2a"
+BOX_BORDER_COLOR = "#2a2e39"
+
 
 # -----------------------------------------------------------
 # Private helpers (shared styling — DRY across both chart funcs)

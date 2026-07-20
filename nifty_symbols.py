@@ -116,6 +116,17 @@ def get_nifty500_symbols():
         logger.info(f"Local cached CSV se NIFTY 500 list li gayi ({len(symbols)} stocks)")
         return symbols
 
+    # V9.7 FIX: Static universe fallback (385 stocks) BEFORE CUSTOM_STOCKS (10 stocks)
+    try:
+        from static_universe import get_static_universe
+        static = get_static_universe()
+        if static:
+            symbols = [s["symbol"] for s in static if s.get("symbol")]
+            logger.info(f"Static universe fallback: {len(symbols)} stocks use ho rahe hain")
+            return symbols
+    except ImportError:
+        pass
+
     logger.warning(
         "NIFTY 500 list kahin se nahi mili (NSE block + koi local CSV nahi). "
         "CUSTOM_STOCKS list use kar raha hoon. Behtar hoga ki "

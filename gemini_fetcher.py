@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Gemini API config
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-pro-preview")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
