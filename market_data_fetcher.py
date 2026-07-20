@@ -620,25 +620,16 @@ def _period_to_days(period):
 # ───────────────────────────────────────────────────────────────────
 def fetch_daily_ohlcv(symbol, period="1y"):
     """
-    Ek symbol ke liye daily OHLCV DataFrame deta hai, priority chain
-    ke saath. V9.2 mein Upstox API PRIORITY #1 banaya gaya
-    (sabse fast + reliable, 25 req/sec). Agar Upstox token missing,
-    to Yahoo Direct fallback.
+    V9.9: SIRF Upstox Analytics API (user request — Yahoo/NSE/yfinance hata do).
+    Agar Upstox token missing hai, to Yahoo Direct fallback (emergency only).
 
-    Priority: Upstox API -> Yahoo Direct -> NSE Chart -> nse-package ->
-              Stooq -> jugaad-data -> yfinance-lib
-
-    Return: DataFrame [Date, Open, High, Low, Close, Volume] ya None.
+    Priority: Upstox Analytics API -> Yahoo Direct (emergency fallback)
     """
-    # V9.2: UPSTOX API — PRIORITY #1 (fastest, 25 req/sec, no cloud block)
-    # Token required (OAuth login via Telegram). Agar token missing,
-    # silently skip to Yahoo Direct (no crash).
+    # V9.9: UPSTOX ANALYTICS API — PRIMARY + ONLY (1 year token, 25 req/sec)
     try:
-        from upstox_fetcher import fetch_historical_data, is_token_valid, UPSTOX_API_KEY
-        if UPSTOX_API_KEY and is_token_valid():
-            # Symbol se .NS suffix hatao (Upstox bina suffix chahiye)
+        from upstox_fetcher import fetch_historical_data, is_token_valid, UPSTOX_ANALYTICS_TOKEN
+        if UPSTOX_ANALYTICS_TOKEN and is_token_valid():
             clean_sym = symbol.replace(".NS", "").replace(".BO", "")
-            # Index symbols skip karo (Upstox sirf equities)
             if not clean_sym.startswith("^"):
                 days_map = {"1d": 3, "5d": 8, "1mo": 35, "3mo": 95,
                             "6mo": 185, "1y": 370, "2y": 740, "5y": 1830}
@@ -649,61 +640,17 @@ def fetch_daily_ohlcv(symbol, period="1y"):
     except Exception as e:
         logger.debug(f"Upstox fetch fail for {symbol}: {e}")
 
-    # V8.3.2: Yahoo Direct API — cloud par SABSE RELIABLE fallback. Browser
-    # headers ke saath NSE-block aur yfinance-rate-limit dono se
-    # bachata hai. Index symbols (^NSEI) bhi isse mil jaate hain.
+    # V9.9: Emergency fallback — Yahoo Direct (sirf if Upstox token not set)
+    # Ye sirf tab chalega jab UPSTOX_ANALYTICS_TOKEN set nahi hai
     df = _fetch_yahoo_direct(symbol, period)
     if df is not None and not df.empty:
         return df
 
-    # Index symbols ke liye Yahoo Direct best hai. Agar fail, to
-    # yfinance-lib fallback (dheere dheere but sometimes works).
+    # Index symbols ke liye yfinance-lib (last resort for ^NSEI etc)
     if symbol.strip().startswith("^"):
-        logger.debug(f"{symbol}: Yahoo direct fail, yfinance-lib try")
         return _fetch_yfinance_daily(symbol, period)
 
-    period_days = _period_to_days(period)
-
-    # NSE sources (cloud par often block, but try karte hain — kabhi-kabhi mil jaata)
-    if _is_healthy("nse_chart"):
-        df = _fetch_nse_chart(symbol, period_days)
-        if df is not None and not df.empty:
-            _mark_success("nse_chart")
-            return df
-        _mark_fail("nse_chart")
-
-    if _is_healthy("nse_package"):
-        df = _fetch_nse_package(symbol, period_days)
-        if df is not None and not df.empty:
-            _mark_success("nse_package")
-            return df
-        _mark_fail("nse_package")
-
-    if _is_healthy("stooq"):
-        df = _fetch_stooq(symbol, period_days)
-        if df is not None and not df.empty:
-            _mark_success("stooq")
-            return df
-        _mark_fail("stooq")
-
-    if _is_healthy("jugaad_data"):
-        df = _fetch_jugaad_data(symbol, period_days)
-        if df is not None and not df.empty:
-            _mark_success("jugaad_data")
-            return df
-        _mark_fail("jugaad_data")
-
-    # LAST fallback: yfinance library (shared-IP rate-limit risk)
-    if _is_healthy("yfinance"):
-        logger.info(f"{symbol}: Yahoo direct + NSE sources fail, yfinance-lib fallback")
-        df = _fetch_yfinance_daily(symbol, period)
-        if df is not None and not df.empty:
-            _mark_success("yfinance")
-            return df
-        _mark_fail("yfinance")
-
-
-    logger.warning(f"{symbol}: SAARE sources (NSE Chart + nse-package + Stooq + jugaad-data + yfinance) fail ho gaye")
+    logger.warning(f"{symbol}: Upstox + Yahoo dono fail. UPSTOX_ANALYTICS_TOKEN check karo.")
     return None
 
 

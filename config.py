@@ -480,7 +480,7 @@ UPSTOX_ENABLED = True  # Set False to disable Upstox (use Yahoo fallback)
 #
 # Flow: GLM → fail → Gemini → fail → rule-based
 GEMINI_API_KEY = _env_or("GEMINI_API_KEY", "")
-GEMINI_MODEL = _env_or("GEMINI_MODEL", "gemini-3-pro-preview")
+GEMINI_MODEL = _env_or("GEMINI_MODEL", "gemini-2.5-flash")
 
 # V9.3: TRAILING STOPLOSS + 9 EMA EXIT settings
 TRAILING_SL_ATR_MULTIPLIER = 2.0    # SL = close - (ATR × 2.0)
