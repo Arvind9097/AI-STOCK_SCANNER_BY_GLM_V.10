@@ -99,6 +99,7 @@ def _fetch_today_intraday(symbol, interval="5m"):
         return None
 
 
+# ... existing code ...
 def _filter_today_bars(df):
     """V8.2.0: intraday DataFrame ko sirf aaj ke IST-date wale bars par filter karta hai."""
     if df is None or df.empty:
@@ -109,12 +110,15 @@ def _filter_today_bars(df):
             idx_dates = df.index.tz_convert(IST).date
         else:
             idx_dates = df.index.date
-        mask = [d == today_ist for d in idx_dates]
+            
+        # V10.2 FIX: List comprehension hatakar Vectorized pandas/numpy operation 
+        # lagaya gaya hai. Isse intraday data filtering milliseconds mein hogi.
+        mask = (idx_dates == today_ist)
+        
         today_df = df[mask]
         return today_df if not today_df.empty else df
     except Exception:
         return df
-
 
 def _get_universe():
     """Intraday scanner jaisa hi liquid universe (poore Nifty500 par practical nahi)."""
