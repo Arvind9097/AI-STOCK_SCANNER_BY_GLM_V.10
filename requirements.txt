@@ -1,28 +1,14 @@
-Data Fetching & Processing
-
 pandas2.2.2
 numpy1.26.4
 yfinance0.2.40
 requests2.32.3
-feedparser==6.0.11
-
-Alternate NSE Fetchers (As per your V8.1.2 Update)
-
-jugaad-data==0.2.3
-nse[server]==1.2.0
-
-AI & LLM (Google Gemini & Environment)
-
+feedparser6.0.11
+jugaad-data0.2.3
+nse[server]1.2.0
 python-dotenv1.0.1
 google-generativeai0.8.3
-
-PDF & Charts (If used in your charts.py / pdf_builder.py)
-
 matplotlib3.9.0
 mplfinance0.12.10b0
-reportlab==4.2.0
-
-Web / Health Server (For Render)
-
+reportlab4.2.0
 Flask3.0.3
 gunicorn22.0.0
