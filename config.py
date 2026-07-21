@@ -34,12 +34,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # ==========================================
 # 📈 DATA DOWNLOADING & FETCHING
 # ==========================================
-# Missing settings fixed:
 SYMBOL_SOURCE = "NSE"  # Options: 'NSE', 'CSV', 'FALLBACK'
 CSV_PATH = "data/nse_all_stocks.csv"
 MAX_WORKERS = 10
 CHUNK_SIZE = 10
 SLEEP_BETWEEN_CHUNKS_SEC = 5
+
+# 🔥 FIX: Added PERIOD and INTERVAL for downloader.py
+PERIOD = "1y"
+INTERVAL = "1d"
 
 # ==========================================
 # 💾 DATA & CACHE SETTINGS
