@@ -44,7 +44,9 @@ UPSTOX_API_SECRET = os.environ.get("UPSTOX_API_SECRET", "")
 
 # Upstox API v2 endpoints
 UPSTOX_BASE = "https://api.upstox.com/v2"
-UPSTOX_HISTORICAL_URL = f"{UPSTOX_BASE}/historical/candle"
+
+# 🔥 FIX: URL mein 'historical/candle' ki jagah 'historical-candle' (dash) aayega
+UPSTOX_HISTORICAL_URL = f"{UPSTOX_BASE}/historical-candle" 
 UPSTOX_QUOTE_URL = f"{UPSTOX_BASE}/market-quote/ltp"
 UPSTOX_PROFILE_URL = f"{UPSTOX_BASE}/user/profile"
 
@@ -222,6 +224,7 @@ def _make_upstox_request(url: str, params: dict = None) -> Optional[dict]:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
+                "Api-Version": "2.0" # 🔥 FIX: Upstox API requires API version in headers
             },
             params=params,
             timeout=15,
@@ -262,7 +265,7 @@ def fetch_historical_data(symbol: str, days: int = 365) -> Optional[Any]:
         return None
 
     # Upstox historical candle API:
-    # GET /v2/historical/candle/{instrument_key}/day/{to_date}/{from_date}
+    # GET /v2/historical-candle/{instrument_key}/day/{to_date}/{from_date}
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
