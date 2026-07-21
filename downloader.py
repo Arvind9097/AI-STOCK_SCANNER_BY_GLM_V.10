@@ -1,105 +1,134 @@
 """
 ===========================================================
- GLOBAL CONFIGURATION FILE (V10.2 - Gemini AI Edition)
+ DOWNLOADER MODULE (V10.2 - Auto-Fix Edition)
+===========================================================
+Ye module main.py ke liye `download_all` aur `download_benchmark`
+functions provide karta hai taaki koi ImportError na aaye.
 ===========================================================
 """
 import os
-from dotenv import load_dotenv
+import time
+import random
+import pandas as pd
+import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Load environment variables from .env file (if it exists)
-load_dotenv()
+# Config se saare variables import kiye gaye hain
+from config import (
+    CSV_PATH, PERIOD, INTERVAL, MAX_WORKERS,
+    DOWNLOAD_RETRIES, RETRY_SLEEP_SEC, RANDOM_DELAY_MIN_SEC, RANDOM_DELAY_MAX_SEC,
+    RATE_LIMIT_BACKOFF_BASE_SEC, RATE_LIMIT_BACKOFF_MAX_SEC, RATE_LIMIT_MAX_RETRIES,
+    SYMBOL_SOURCE
+)
 
-# ==========================================
-# 🤖 AI SETTINGS (Primary: Gemini)
-# ==========================================
-AI_MODE = "GEMINI_API"  # Set to "RULE_BASED" if you want 100% free offline analysis
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Safe imports for Cache and Logger
+try:
+    from cache import load_from_cache, save_to_cache
+except ImportError:
+    def load_from_cache(symbol): return None
+    def save_to_cache(symbol, df): pass
 
-# Legacy Z.AI (GLM) keys for backward compatibility
-ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
-ZAI_API_BASE = os.environ.get("ZAI_API_BASE", "https://api.z.ai/api/paas/v4")
-ZAI_MODEL = os.environ.get("ZAI_MODEL", "glm-4.5")
+try:
+    from logger import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger("Downloader")
+    logger.setLevel(logging.INFO)
 
-# AI Brain (Telegram Conversational AI)
-AI_BRAIN_ENABLED = True
-AI_BRAIN_MAX_TOKENS = 300
 
-# ==========================================
-# 📱 TELEGRAM SETTINGS
-# ==========================================
-# NEVER hardcode token here. Use Render Environment or .env file
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+def download_benchmark():
+    """
+    main.py ko start hone ke liye NIFTY 50 ka data chahiye.
+    Ye function wahi provide karta hai.
+    """
+    logger.info("NIFTY 50 benchmark fetch kar raha hoon...")
+    ticker = "^NSEI"
+    try:
+        df = yf.download(ticker, period=PERIOD, interval=INTERVAL, progress=False)
+        if df is not None and not df.empty:
+            # Fix multi-index DataFrame behavior for newer yfinance versions
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df.dropna(subset=["Close"])
+            return df
+    except Exception as e:
+        logger.error(f"Benchmark download fail: {e}")
+    return None
 
-# ==========================================
-# 📈 DATA DOWNLOADING & FETCHING
-# ==========================================
-SYMBOL_SOURCE = "NSE"  # Options: 'NSE', 'CSV', 'FALLBACK'
-CSV_PATH = "data/nse_all_stocks.csv"
-MAX_WORKERS = 10
-CHUNK_SIZE = 10
-SLEEP_BETWEEN_CHUNKS_SEC = 5
 
-# Downloader specific settings
-PERIOD = "1y"
-INTERVAL = "1d"
-RANDOM_DELAY_MIN_SEC = 1
-RANDOM_DELAY_MAX_SEC = 3
-DOWNLOAD_RETRIES = 3  
-RETRY_SLEEP_SEC = 5
+def _fetch_single_stock(symbol, force_fresh=False):
+    """Ek single stock ko download karne ka logic with Retries & Rate Limiting."""
+    ticker = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
+    
+    # 1. Cache Check (Save API Calls)
+    if not force_fresh:
+        cached_df = load_from_cache(ticker)
+        if cached_df is not None and not cached_df.empty:
+            return ticker, cached_df
 
-# --- NEW FIX: Rate Limit & Backoff Variables ---
-RATE_LIMIT_BACKOFF_BASE_SEC = 2
-RATE_LIMIT_BACKOFF_MAX_SEC = 60
-RATE_LIMIT_MAX_RETRIES = 5
+    # 2. Random Delay to prevent IP Block
+    time.sleep(random.uniform(RANDOM_DELAY_MIN_SEC, RANDOM_DELAY_MAX_SEC))
 
-# ==========================================
-# 💾 DATA & CACHE SETTINGS
-# ==========================================
-USE_CACHE = True
-DATA_DIR = "data"
-CACHE_DIR = "data/cache"
-CACHE_MAX_AGE_HOURS = 20
-PDF_REPORT_PATH = "reports/AI_Report.pdf"
+    # 3. Fetch Data with Retries
+    for attempt in range(DOWNLOAD_RETRIES):
+        try:
+            df = yf.download(ticker, period=PERIOD, interval=INTERVAL, progress=False)
+            
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.dropna(subset=["Close"])
+                
+                if len(df) > 0:
+                    save_to_cache(ticker, df)
+                    return ticker, df
+                    
+        except Exception as e:
+            logger.debug(f"{ticker} fetch attempt {attempt+1} fail: {e}")
+            
+        # Backoff sleep before retry
+        time.sleep(RETRY_SLEEP_SEC)
 
-# ==========================================
-# 🚀 SCANNER & SCHEDULER SETTINGS
-# ==========================================
-INTRADAY_UNIVERSE_TOP_N = 100
-INTRADAY_INTERVAL = "5m"
+    return ticker, None
 
-BTST_LOOKBACK_MINUTES = 60
-BTST_DAY_HIGH_PROXIMITY_PCT = 1.5
-BTST_TOP_N_RESULTS = 5
 
-INTRADAY_LIVE_ALERT_ENABLED = True
-INTRADAY_LIVE_ALERT_INTERVAL = 5
+def download_all(force_fresh=False):
+    """
+    Bulk downloader for all stocks (Required by main.py line 22).
+    Returns a dictionary mapping {symbol: DataFrame}.
+    """
+    logger.info(f"Bulk download shuru ho raha hai... (Workers: {MAX_WORKERS})")
+    
+    if not os.path.exists(CSV_PATH):
+        logger.error(f"CSV file nahi mili: {CSV_PATH}. Fallback to NIFTY50 stocks.")
+        symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"] # Fallback list
+    else:
+        try:
+            df_csv = pd.read_csv(CSV_PATH)
+            # Find the symbol column dynamically
+            sym_col = next((c for c in df_csv.columns if c.strip().lower() in ['symbol', 'symbols', 'ticker']), df_csv.columns[0])
+            symbols = df_csv[sym_col].dropna().astype(str).str.strip().tolist()
+        except Exception as e:
+            logger.error(f"CSV read error: {e}")
+            return {}
 
-# Alert Timings
-SWING_CHART_DIGEST_TIME = "10:00"
-INTRADAY_SCAN_TIME = "09:30"
-BTST_SCAN_TIME = "15:05"
+    results = {}
+    total = len(symbols)
+    logger.info(f"Total {total} stocks fetch karne hain...")
 
-# Run Weekend Report on Saturday (5) & Sunday (6)
-WEEKEND_REPORT_DAYS = [5, 6] 
+    # Multi-threading for fast downloads
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(_fetch_single_stock, sym, force_fresh): sym for sym in symbols}
+        
+        completed = 0
+        for future in as_completed(futures):
+            completed += 1
+            ticker, df = future.result()
+            if df is not None:
+                results[ticker] = df
+                
+            if completed % 50 == 0 or completed == total:
+                logger.info(f"Download Progress: {completed}/{total} stocks processed.")
 
-# ==========================================
-# 📊 CUSTOM UNIVERSE & SECTORS
-# ==========================================
-# Add your favorite stocks here (always end with .NS)
-CUSTOM_STOCKS = [
-    "RELIANCE.NS", 
-    "TCS.NS", 
-    "HDFCBANK.NS", 
-    "INFY.NS", 
-    "ICICIBANK.NS",
-    "TATAMOTORS.NS"
-]
-
-SECTORAL_INDICES = {
-    "Nifty Bank": "^NSEBANK",
-    "Nifty IT": "^CNXIT",
-    "Nifty Auto": "^CNXAUTO",
-    "Nifty Pharma": "^CNXPHARMA",
-    "Nifty FMCG": "^CNXFMCG"
-}
+    logger.info(f"Bulk download complete. {len(results)}/{total} stocks ka data mila.")
+    return results
