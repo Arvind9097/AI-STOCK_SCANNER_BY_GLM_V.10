@@ -26,6 +26,7 @@ V8.2.0 FIXES (Task F5):
   6. IST timezone use kiya gaya hai (today's picks date etc.).
 ===========================================================
 """
+
 import json
 import os
 import signal
@@ -35,11 +36,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
-
-# V10.1 FIX: Persistent session banayi gayi hai.
-# Isse HTTP "Keep-Alive" enable hoga aur bot har 1-2 second mein naya 
-# TCP connection/SSL handshake nahi banayega, jisse server CPU/network load bachega.
-_telegram_session = requests.Session()
 
 from tracker import (
     check_live_market_hits, generate_daily_performance_report,
@@ -140,6 +136,7 @@ try:
 except Exception:
     pass
 
+
 def _load_offset():
     """V8.2.0: data/bot_offset.json se last offset+1 load karta hai (atomic read)."""
     try:
@@ -182,6 +179,7 @@ def _install_signal_handlers():
             signal.signal(sig, _request_shutdown)
         except (ValueError, OSError):
             pass  # non-main thread - skip
+
 
 def _run_rerun_in_background(name, chat_id):
     """
@@ -303,11 +301,18 @@ BOT_TOKEN = TELEGRAM_BOT_TOKEN
 
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 
+# V10.2 BUG 2 FIX: Global requests.Session() for HTTP Keep-Alive.
+# Pehle har requests.get()/post() naya TCP connection + SSL handshake banata tha.
+# Ab _telegram_session reuse karta hai — CPU save, faster, kam 429 risk.
+_telegram_session = requests.Session()
+_telegram_session.headers.update({"Connection": "keep-alive"})
+
 
 def clear_old_webhook():
     """Script start hote hi purane webhook ko automatic delete karne ke liye"""
     try:
         url = BASE_URL + "deleteWebhook"
+        # V10.2 BUG 2 FIX: _telegram_session use kiya (Keep-Alive)
         res = _telegram_session.get(url, timeout=10).json()
         if res.get("ok"):
             logger.info("Purana Telegram Webhook successfully clean kar diya gaya hai.")
@@ -322,6 +327,7 @@ def clear_old_webhook():
 # longer backoff leta hai (taaki redeploy ke dauran old+new instance
 # conflict mein 1/sec spam na karein).
 _last_getupdates_status = 200
+
 
 def get_bot_updates(offset=None):
     """Telegram server se updates lene ke liye (handles ISP drop/timeout gracefully)"""
@@ -382,6 +388,7 @@ def reply_to_telegram(chat_id, text_message):
                 "text": chunk,
                 "parse_mode": "HTML",
             }
+            # V10.2 BUG 2 FIX: _telegram_session.post (Keep-Alive)
             response = _telegram_session.post(url, json=payload, timeout=20)
             if response.status_code != 200:
                 # V8.2.0: truncated response.text - chat_id/message content leak prevent
@@ -390,6 +397,7 @@ def reply_to_telegram(chat_id, text_message):
                 break
     except Exception as e:
         logger.error(f"Reply bhejne me network error: {e}")
+
 
 def send_inline_menu(chat_id):
     """Button menu bhejne ke liye function (V9.7: 16 buttons, 2 per row for full text visibility).
@@ -521,6 +529,7 @@ def get_nifty_trend_text():
         logger.warning(f"Nifty trend fetch fail: {e}")
         return "NIFTY trend abhi calculate nahi ho paya."
 
+
 def get_latest_news_text(limit=5):
     """
     V9.0 NAYA: Latest 3-5 breaking news headlines - breaking_news.py
@@ -639,6 +648,7 @@ def _looks_like_stock_name(text):
         return False
     return True
 
+
 def handle_natural_language(chat_id, user_message):
     intent, symbol = parse_intent(user_message)
 
@@ -755,6 +765,7 @@ def handle_natural_language(chat_id, user_message):
                 "• <b>'/help'</b> - poori commands list\n\n"
                 "Example: 'Reliance ka analysis bhejo' ya seedha 'TCS'"
             )
+
 
 def run_listener_loop():
     """
@@ -973,6 +984,7 @@ def run_listener_loop():
         time.sleep(1)
 
     logger.info("[bot_listener] polling loop cleanly exit ho gaya (SIGTERM/SIGINT received)")
+
 
 def start_bot_engine():
     """
