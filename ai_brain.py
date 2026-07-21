@@ -33,6 +33,7 @@ rule-based reply (generic helpful message).
 """
 
 import json
+import math
 from config import (
     ZAI_API_KEY, ZAI_API_BASE, ZAI_MODEL,
     AI_BRAIN_ENABLED, AI_BRAIN_MAX_TOKENS,
@@ -98,6 +99,15 @@ def _call_glm(user_question, context_text):
         return None
 
 
+def safe_float(val, default=0.0):
+    """V10.1 FIX: Handles NaN values safely for new IPOs without enough history."""
+    try:
+        f = float(val)
+        return default if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return default
+
+
 def _build_context(intent, symbol=None):
     """
     Intent ke hisaab se context data gather karta hai.
@@ -157,12 +167,15 @@ def _build_context(intent, symbol=None):
             if df is not None and len(df) >= 30:
                 df_ind = add_indicators(df.copy())
                 last = df_ind.dropna(subset=["Close"]).iloc[-1]
-                close = float(last["Close"])
-                rsi = float(last.get("RSI", 0)) or 0
-                adx = float(last.get("ADX", 0)) or 0
-                ema20 = float(last.get("EMA20", 0)) or 0
-                ema50 = float(last.get("EMA50", 0)) or 0
-                ema200 = float(last.get("EMA200", 0)) or 0
+                
+                # V10.1 FIX: Using safe_float to prevent math logic crash due to NaN values
+                close = safe_float(last.get("Close", 0))
+                rsi = safe_float(last.get("RSI", 0))
+                adx = safe_float(last.get("ADX", 0))
+                ema20 = safe_float(last.get("EMA20", 0))
+                ema50 = safe_float(last.get("EMA50", 0))
+                ema200 = safe_float(last.get("EMA200", 0))
+                
                 display = clean_symbol(symbol)
                 parts.append(
                     f"\n=== {display} LIVE DATA ===\n"
