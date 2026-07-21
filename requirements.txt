@@ -1,14 +1,31 @@
-pandas==2.2.2
-numpy==1.26.4
-yfinance==0.2.40
-requests==2.32.3
-feedparser==6.0.11
-jugaad-data==0.2.3
-nse[server]==1.3.1
-python-dotenv==1.0.1
-google-generativeai==0.8.3
-matplotlib==3.9.0
-mplfinance==0.12.10b0
-reportlab==4.2.0
-Flask==3.0.3
-gunicorn==22.0.0
+pandas
+numpy
+# V9.1.2 FIX: yfinance 0.2.54 -> >=0.2.58 (multi-index DataFrame bugs fixed)
+yfinance>=0.2.58
+openpyxl
+matplotlib
+reportlab
+requests
+deep-translator
+python-dotenv
+
+# --- V8.2.0: Breaking news (RSS feeds) ---
+feedparser
+
+# --- V8.2.0: Render 24x7 health server (/ping for UptimeRobot) ---
+flask
+gunicorn
+
+# --- V8.2.0 Update: Additional free NSE data source (no auth needed) ---
+# V9.1.2 FIX: nse[server] extra optional hai aur Render par install fail
+# kar sakta hai. Safe version: plain nse package (no extras).
+jugaad-data
+nse
+
+# --- V8.2.0: ZoneInfo timezone data (Windows par stdlib tzdata nahi hota;
+# Linux/Mac par bhi harmless. IST timezone ke liye zaroori) ---
+tzdata
+
+# --- V9.1.1: GLM API retry (exponential backoff for 429 handling) ---
+tenacity
+google-generativeai0.8.3
