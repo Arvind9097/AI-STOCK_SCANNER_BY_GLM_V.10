@@ -23,8 +23,7 @@ from downloader import download_all, download_benchmark
 from scanner import scan
 from charts import generate_charts_for_top
 from report import save_report
-from whatsapp_alert import send_alert as send_whatsapp_alert
-from email_alert import send_alert as send_email_alert
+# V10.0: Email/WhatsApp removed (user request — sirf Telegram use hota hai)
 from config import CHARTS_FOR_TOP_N, TOP_N_BUY_LIST, BENCHMARK_SYMBOL, CLOSE_BESTBUYS_COUNT
 from logger import logger
 from utils import clean_symbol, escape_html
@@ -102,13 +101,20 @@ def send_chunked_telegram_report(text_content):
 
 def run_scan_pipeline(force=False):
     """
-    SUBAH KA ENGINE: Naye recommendations dhoondhna aur DB me register karna
+    SUBAH KA ENGINE (9:20 AM): Naye recommendations + Market Scanners.
+
+    V10.1: 9:20 AM par 4 cheezein bheji jaati hain:
+      1. Swing Trading Scan (existing)
+      2. Top Gainers list (V10.1 NAYA)
+      3. Top Losers list (V10.1 NAYA)
+      4. Volume Shockers list (V10.1 NAYA)
+      5. Trending Stocks list (V10.1 NAYA)
 
     force=True: aaj already scan+charts Telegram par bheji ja chuki ho
     to bhi dobara bhejo (default False - duplicate-send se bachne ke liye)
     """
     start = time.time()
-    logger.info("===== AI STOCK SCANNER V4.2 START =====")
+    logger.info("===== AI STOCK SCANNER V10.1 START =====")
 
     if not force and already_dispatched_today("scan_charts"):
         logger.warning(
@@ -332,6 +338,9 @@ def run_scan_pipeline(force=False):
             analysis = escape_html(r.get('AI_Analysis', ''))
             news_text = escape_html(format_news_text(r['Stock'], limit=2))
             weekly = escape_html(r.get('Weekly_Trend', 'UNKNOWN') or 'UNKNOWN')
+            # V10.0: Cap group (Large/Mid/Small)
+            cap_group = r.get('Cap_Group', 'Small Cap')
+            cap_emoji = r.get('Cap_Emoji', '🟠')
 
             # V8.3.0 (G4): compact card - header / levels / R:R+RSI+ADX /
             # Pattern+Weekly / analysis / news / divider. Scannable in 3s.
@@ -340,7 +349,7 @@ def run_scan_pipeline(force=False):
             adx_str = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
 
             report_msg += (
-                f"{signal_emoji} <b>{stk}</b> | 📊 Score: {score}/100 | {signal}{vol_emoji}\n"
+                f"{signal_emoji} <b>{stk}</b> {cap_emoji}{cap_group} | 📊 Score: {score}/100 | {signal}{vol_emoji}\n"
                 f"───────────────────────────\n"
                 f"💵 Entry: {_fmt_price(e_lo)}-{_fmt_price(e_hi)} | 🛑 SL: {_fmt_price(sl)}\n"
                 f"🎯 T1: {_fmt_price(t1)} | T2: {_fmt_price(t2)} | Final: {_fmt_price(t3)}\n"
@@ -364,12 +373,57 @@ def run_scan_pipeline(force=False):
     except Exception as telegram_error:
         logger.error(f"Telegram pipeline failure: {telegram_error}")
 
-    # ---- BACKUP ALERTS ----
+    # V10.1: Market Scanners — Top Gainers, Top Losers, Volume Shockers, Trending
     try:
-        send_whatsapp_alert(result)
-        send_email_alert(result, excel_path, pdf_path)
+        logger.info("V10.1: Market Scanners (Top Gainers/Losers/Volume/Trending) bheje ja rahe hain...")
+        from market_scanners import (
+            scan_top_gainers, scan_52w_high, scan_volume_surge,
+            scan_trending, format_scanner_telegram,
+        )
+
+        # Top Gainers
+        try:
+            gainers = scan_top_gainers(top_n=10)
+            if gainers:
+                send_telegram_text(format_scanner_telegram("gainers", gainers))
+                time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Top Gainers scan fail: {e}")
+
+        # Top Losers (gainers se neeche wale — sort ascending)
+        try:
+            from market_scanners import _batch_fetch, _get_symbols
+            all_stocks = _batch_fetch(_get_symbols())
+            losers = [d for d in all_stocks if d["change_pct"] < 0]
+            losers.sort(key=lambda x: x["change_pct"])
+            if losers:
+                send_telegram_text(format_scanner_telegram("losers", losers[:10]))
+                time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Top Losers scan fail: {e}")
+
+        # Volume Shockers
+        try:
+            vol_surge = scan_volume_surge(top_n=10)
+            if vol_surge:
+                send_telegram_text(format_scanner_telegram("volume", vol_surge))
+                time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Volume Shockers scan fail: {e}")
+
+        # Trending Stocks
+        try:
+            trending = scan_trending(top_n=10)
+            if trending:
+                send_telegram_text(format_scanner_telegram("trending", trending))
+                time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Trending scan fail: {e}")
+
+        logger.info("V10.1: Market Scanners bheje gaye")
     except Exception as e:
-        logger.warning(f"Backup alerts error: {e}")
+        logger.warning(f"Market Scanners pipeline fail: {e}")
+    # Sirf Telegram use hota hai — email/whatsapp code hata diya gaya.
 
     elapsed = time.time() - start
     logger.info(f"\n===== FINISHED in {elapsed:.1f}s =====")

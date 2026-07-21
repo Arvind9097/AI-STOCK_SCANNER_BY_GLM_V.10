@@ -264,8 +264,19 @@ def scan(all_data, benchmark_df=None, max_workers=8):
 
             signal = _get_signal(score)
 
+            # V10.0: Cap classification (Large/Mid/Small)
+            try:
+                from static_universe import get_cap_group, get_cap_emoji
+                cap_group = get_cap_group(stock)
+                cap_emoji = get_cap_emoji(cap_group)
+            except ImportError:
+                cap_group = "Small Cap"
+                cap_emoji = "🟠"
+
             row = {
                 "Stock": stock,
+                "Cap_Group": cap_group,
+                "Cap_Emoji": cap_emoji,
                 "Close": round(entry, 2),
                 "EMA20": round(float(last["EMA20"]), 2),
                 "EMA50": round(float(last["EMA50"]), 2),

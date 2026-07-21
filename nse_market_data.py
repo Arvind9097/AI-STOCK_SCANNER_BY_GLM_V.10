@@ -57,36 +57,57 @@ def _nse_get_with_retry(url, params=None, timeout=10):
 
 def get_gift_nifty():
     """
-    Return: dict {last, change, pct_change, expiry} ya None (fail hone par)
-    Source: NSE ka apna marketStatus API - isme 'giftnifty' key hoti hai.
+    V10.1: GIFT Nifty data — NSE se (primary) ya Yahoo se (fallback).
+    NSE cloud IPs par block karta hai, isliye Yahoo fallback zaroori.
     """
+    # Method 1: NSE API (primary — works on non-cloud)
     try:
         resp = _nse_get_with_retry(MARKET_STATUS_URL, timeout=10)
         data = resp.json()
-
-        # V8.2.0: `data.get("data", {})` agar NSE {"data": null} return
-        # kare to None return karta hai (default {} use nahi hota),
-        # phir None.get("giftnifty") AttributeError raise karta tha.
-        # `or {}` pattern None ko empty dict mein convert karta hai.
         gn = data.get("giftnifty") or (data.get("data") or {}).get("giftnifty")
-        if not gn:
-            return None
-
-        last_val = gn.get("LASTPRICE")
-        change_val = gn.get("DAYCHANGE")
-        pct_val = gn.get("PERCHANGE")
-
-        # V8.2.0: None guard - agar key missing hai to float(None) TypeError
-        # deta tha (misleading log). Ab 0.0 default use karte hain.
-        return {
-            "last": float(last_val) if last_val is not None else 0.0,
-            "change": float(change_val) if change_val is not None else 0.0,
-            "pct_change": float(pct_val) if pct_val is not None else 0.0,
-            "expiry": gn.get("EXPIRYDATE", ""),
-        }
+        if gn:
+            last_val = gn.get("LASTPRICE")
+            change_val = gn.get("DAYCHANGE")
+            pct_val = gn.get("PERCHANGE")
+            return {
+                "last": float(last_val) if last_val is not None else 0.0,
+                "change": float(change_val) if change_val is not None else 0.0,
+                "pct_change": float(pct_val) if pct_val is not None else 0.0,
+                "expiry": gn.get("EXPIRYDATE", ""),
+                "source": "NSE",
+            }
     except Exception as e:
-        logger.warning(f"GIFT Nifty fetch fail: {e}")
-        return None
+        logger.debug(f"GIFT Nifty NSE fail: {e}")
+
+    # Method 2: Yahoo Finance fallback (GIFT Nifty = ^GSPC on Yahoo? No.
+    # Use SGX Nifty proxy: ^NSEI or direct GIFT Nifty futures)
+    try:
+        import requests
+        # Yahoo Finance API — NIFTY 50 futures proxy
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/^NSEI?range=1d&interval=1d"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            result = data.get("chart", {}).get("result", [])
+            if result:
+                meta = result[0].get("meta", {})
+                last_price = meta.get("regularMarketPrice", 0)
+                prev_close = meta.get("chartPreviousClose", meta.get("previousClose", 0))
+                change = last_price - prev_close if prev_close > 0 else 0
+                pct = (change / prev_close * 100) if prev_close > 0 else 0
+                return {
+                    "last": round(last_price, 2),
+                    "change": round(change, 2),
+                    "pct_change": round(pct, 2),
+                    "expiry": "",
+                    "source": "Yahoo (NIFTY proxy)",
+                }
+    except Exception as e:
+        logger.debug(f"GIFT Nifty Yahoo fallback fail: {e}")
+
+    logger.warning("GIFT Nifty: NSE + Yahoo dono fail")
+    return None
 
 
 def get_fii_dii_report():

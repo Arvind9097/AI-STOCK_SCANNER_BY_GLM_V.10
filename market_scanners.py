@@ -218,6 +218,7 @@ def format_scanner_telegram(scanner_type: str, results: List[Dict]) -> str:
 
     titles = {
         "gainers": "🔥 TOP GAINERS",
+        "losers": "🔻 TOP LOSERS",
         "52w_high": "🎯 NEAR 52-WEEK HIGH",
         "volume": "📊 VOLUME SURGE / MOST ACTIVE",
         "trending": "🚀 TRENDING STOCKS",
