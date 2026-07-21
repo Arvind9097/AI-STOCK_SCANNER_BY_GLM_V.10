@@ -33,7 +33,7 @@ rule-based reply (generic helpful message).
 """
 
 import json
-import math
+import math  # Added for safe_float NaN check
 from config import (
     ZAI_API_KEY, ZAI_API_BASE, ZAI_MODEL,
     AI_BRAIN_ENABLED, AI_BRAIN_MAX_TOKENS,
@@ -56,6 +56,14 @@ _SYSTEM_PROMPT = (
     "7. Agar user ne kisi stock ke baare mein pucha aur context mein uska "
     "data hai, to entry/SL/target levels de."
 )
+
+def safe_float(val, default=0.0):
+    """V10.1 FIX: Handles NaN values safely for new IPOs without enough history."""
+    try:
+        f = float(val)
+        return default if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return default
 
 
 def _call_glm(user_question, context_text):
@@ -97,15 +105,6 @@ def _call_glm(user_question, context_text):
     except Exception as e:
         logger.warning(f"AI Brain GLM call fail: {e}")
         return None
-
-
-def safe_float(val, default=0.0):
-    """V10.1 FIX: Handles NaN values safely for new IPOs without enough history."""
-    try:
-        f = float(val)
-        return default if math.isnan(f) else f
-    except (ValueError, TypeError):
-        return default
 
 
 def _build_context(intent, symbol=None):
@@ -168,7 +167,7 @@ def _build_context(intent, symbol=None):
                 df_ind = add_indicators(df.copy())
                 last = df_ind.dropna(subset=["Close"]).iloc[-1]
                 
-                # V10.1 FIX: Using safe_float to prevent math logic crash due to NaN values
+                # FIXED: Applying safe_float to avoid math logic crash from NaN
                 close = safe_float(last.get("Close", 0))
                 rsi = safe_float(last.get("RSI", 0))
                 adx = safe_float(last.get("ADX", 0))
