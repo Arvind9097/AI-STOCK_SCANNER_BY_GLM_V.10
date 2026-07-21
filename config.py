@@ -40,9 +40,11 @@ MAX_WORKERS = 10
 CHUNK_SIZE = 10
 SLEEP_BETWEEN_CHUNKS_SEC = 5
 
-# 🔥 FIX: Added PERIOD and INTERVAL for downloader.py
+# 🔥 FIX: Added Missing Variables for downloader.py
 PERIOD = "1y"
 INTERVAL = "1d"
+RANDOM_DELAY_MIN_SEC = 1
+RANDOM_DELAY_MAX_SEC = 3
 
 # ==========================================
 # 💾 DATA & CACHE SETTINGS
