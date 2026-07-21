@@ -1,160 +1,131 @@
 """
 ===========================================================
- AI ANALYSIS MODULE  (V8.2.0 — Z.AI GLM API)
+ AI ANALYSIS MODULE  (V10.2 — Google Gemini API)
 ===========================================================
 Har stock ke liye ek chhota sa human-readable analysis text
 banata hai.
 
-AI_MODE = "RULE_BASED" (default):
+AI_MODE = "RULE_BASED" (Secondary/Fallback):
     Koi API key nahi chahiye. Indicators ke basis par
     templated Hindi/English analysis generate hota hai.
-    500 stocks ke liye bhi instant + free.
+    Instant + 100% Free.
 
-AI_MODE = "GLM_API" (V8.2.0):
-    Z.AI ke GLM API (OpenAI-compatible) ko call karke real
-    natural-language analysis banwata hai. config.py / .env
-    mein ZAI_API_KEY daalna zaroori hai.
-    Dhyaan rahe - 500 stocks ke liye 500 API calls lagenge,
-    isliye ye mode sirf STRONG BUY / BUY signal wale top
-    stocks ke liye hi use hota hai (neeche GLM_API_ONLY_FOR_SIGNALS).
+AI_MODE = "GEMINI_API" (Primary):
+    Google ke Gemini API (gemini-1.5-flash) ko call karke real
+    natural-language analysis banwata hai.
+    Gemini ka free tier kaafi bada hai (15 req/min). Agar limit 
+    hit hoti hai, toh ye automatically RULE_BASED par shift ho jayega.
 
-    API key: https://z.ai par account banao, API key lo,
-             .env mein ZAI_API_KEY=<key> daalo.
-    Model:   ZAI_MODEL (default "glm-4.5"). Agar "glm-5.2"
-             available ho to .env mein ZAI_MODEL=glm-5.2 set karo.
-
-V8.2.0 CHANGE: Pehle ye Anthropic Claude API use karta tha
-(model "claude-sonnet-4-6" — jo ek INVALID model name tha,
-isliye CLAUDE_API mode kabhi kaam hi nahi karta tha). Ab
-Z.AI GLM API use hota hai jo OpenAI-compatible, sasta, aur
-Hinglish analysis ke liye behtar hai.
+    API key: https://aistudio.google.com/ par jakar free API key lo,
+             .env mein GEMINI_API_KEY=<key> daalo.
 ===========================================================
 """
 
-from config import AI_MODE, ZAI_API_KEY, ZAI_API_BASE, ZAI_MODEL
+import os
+import config
 from logger import logger
 
-# GLM_API mode mein sirf in signals ke liye real API call karo
-# (baaki sab rule-based - taaki cost/time control mein rahe)
-GLM_API_ONLY_FOR_SIGNALS = {"STRONG BUY", "BUY"}
+# Safe imports taaki agar config mein variables na ho toh crash na kare
+AI_MODE = getattr(config, "AI_MODE", "RULE_BASED")
+GEMINI_API_KEY = getattr(config, "GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
-# Backward-compat: purana "CLAUDE_API" mode naam bhi accept karo
-# (warn karke GLM_API jaisa hi behave karega)
-_CLAUDE_MODE_ALIAS = "CLAUDE_API"
+# Sirf STRONG BUY / BUY signal wale stocks ke liye Gemini API call karo
+# (Taaki free API limit cross na ho)
+GEMINI_API_ONLY_FOR_SIGNALS = {"STRONG BUY", "BUY"}
+
+try:
+    import google.generativeai as genai
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logger.warning("google-generativeai package missing. Please run: pip install google-generativeai")
 
 
 def _rule_based_analysis(row):
+    """Secondary Fallback AI: 100% Free, Offline, and Instant."""
     parts = []
 
-    trend_ok = row["Close"] > row["EMA20"] > row["EMA50"] > row["EMA200"]
+    trend_ok = row.get("Close", 0) > row.get("EMA20", 0) > row.get("EMA50", 0) > row.get("EMA200", 0)
     if trend_ok:
         parts.append(f"{row['Stock']} strong uptrend mein hai (Close 20/50/200 EMA se upar).")
-    elif row["Close"] < row["EMA200"]:
+    elif row.get("Close", 0) < row.get("EMA200", 0):
         parts.append(f"{row['Stock']} long-term downtrend mein hai (Close 200 EMA se neeche).")
     else:
         parts.append(f"{row['Stock']} mixed trend dikha raha hai.")
 
-    if row["RSI"] > 70:
-        parts.append(f"RSI {row['RSI']} - overbought zone, short-term pullback possible.")
-    elif row["RSI"] > 55:
-        parts.append(f"RSI {row['RSI']} - momentum bullish side par hai.")
-    elif row["RSI"] < 30:
-        parts.append(f"RSI {row['RSI']} - oversold zone, bounce ho sakta hai.")
+    rsi = row.get("RSI", 50)
+    if rsi > 70:
+        parts.append(f"RSI {rsi} - overbought zone, short-term pullback possible.")
+    elif rsi > 55:
+        parts.append(f"RSI {rsi} - momentum bullish side par hai.")
+    elif rsi < 30:
+        parts.append(f"RSI {rsi} - oversold zone, bounce ho sakta hai.")
     else:
-        parts.append(f"RSI {row['RSI']} - neutral zone mein hai.")
+        parts.append(f"RSI {rsi} - neutral zone mein hai.")
 
-    if row["ADX"] > 25:
-        parts.append(f"ADX {row['ADX']} batata hai trend strong hai.")
-    elif row["ADX"] < 15:
-        parts.append(f"ADX {row['ADX']} kam hai, stock range-bound/sideways ho sakta hai.")
+    adx = row.get("ADX", 20)
+    if adx > 25:
+        parts.append(f"ADX {adx} batata hai trend strong hai.")
+    elif adx < 15:
+        parts.append(f"ADX {adx} kam hai, stock range-bound/sideways ho sakta hai.")
 
-    if row["Breakout"]:
-        parts.append("Aaj 20-day high breakout hua hai.")
+    if row.get("Breakout"):
+        parts.append("Aaj 20-din ka high breakout hua hai.")
 
-    if row["Volume_Spike"]:
+    if row.get("Volume_Spike"):
         parts.append("Volume mein spike hai - institutional interest ka sign ho sakta hai.")
     elif row.get("Volume_Dryup"):
-        parts.append("Volume dry-up hai (average se kaafi kam) - bade move se pehle ki khaamoshi ho sakti hai.")
+        parts.append("Volume dry-up hai - bade move se pehle ki khaamoshi ho sakti hai.")
 
     if row.get("Patterns"):
         parts.append(f"Chart pattern dikha: {', '.join(row['Patterns'])}.")
 
-    if row.get("Relative_Strength") is not None:
-        if row["Relative_Strength"] > 0:
-            parts.append(f"NIFTY se {row['Relative_Strength']:+.1f} points behtar perform kar raha hai.")
-        else:
-            parts.append(f"NIFTY se {row['Relative_Strength']:+.1f} points kamzor perform kar raha hai.")
-
-    if row["Consolidating"]:
+    if row.get("Consolidating"):
         parts.append("Stock consolidation phase mein hai, breakout ka wait chal raha hai.")
 
-    if row["Risk_Reward"] is not None:
+    if row.get("Risk_Reward") is not None:
         parts.append(
-            f"Entry ~{row['Entry']}, Stoploss ~{row['Stoploss']}, Target ~{row['Target']} "
+            f"Entry ~{row.get('Entry')}, Stoploss ~{row.get('Stoploss')}, Target ~{row.get('Target')} "
             f"(Risk:Reward = 1:{row['Risk_Reward']})."
         )
 
-    parts.append(f"Overall Score: {row['Score']}/100 -> Signal: {row['Signal']}.")
+    parts.append(f"Overall Score: {row.get('Score')}/100 -> Signal: {row.get('Signal')}.")
 
     return " ".join(parts)
 
 
-def _glm_api_analysis(row):
+def _gemini_api_analysis(row):
     """
-    Z.AI GLM API (OpenAI-compatible) se natural-language analysis.
-    - Endpoint: {ZAI_API_BASE}/chat/completions
-    - Auth: Bearer {ZAI_API_KEY}
-    - Body: OpenAI format (model, messages, max_tokens, temperature)
-    - Response: data["choices"][0]["message"]["content"]
-
-    Kisi bhi failure par gracefully rule-based analysis return karta
-    hai (crash nahi hota), taaki ek stock ka API error poore scan ko
-    rok na de.
+    Primary AI: Google Gemini API.
+    Agar rate limit ya koi error aata hai toh gracefully rule-based par shift hota hai.
     """
     try:
-        import requests
-
         prompt = (
-            f"Neeche ek stock ke technical indicators diye hain. Isko 2-3 lines mein "
-            f"Hinglish mein analyze karo, ek trader ke perspective se, bina financial "
-            f"advice diye (sirf technical observation):\n\n"
-            f"Stock: {row['Stock']}\n"
-            f"Close: {row['Close']}, EMA20: {row['EMA20']}, EMA50: {row['EMA50']}, EMA200: {row['EMA200']}\n"
-            f"RSI: {row['RSI']}, MACD: {row['MACD']} vs Signal: {row['MACD_SIGNAL']}\n"
-            f"ADX: {row['ADX']}, Supertrend: {row['Supertrend']}\n"
-            f"Volume Spike: {row['Volume_Spike']}, Breakout: {row['Breakout']}, "
-            f"Consolidating: {row['Consolidating']}\n"
-            f"Support: {row['Support']}, Resistance: {row['Resistance']}\n"
-            f"Score: {row['Score']}/100, Signal: {row['Signal']}"
+            f"Neeche ek Indian stock ke technical indicators diye hain. Isko 2-3 lines mein "
+            f"Hinglish (Hindi written in English alphabets) mein analyze karo. "
+            f"Ek trader ke perspective se batao bina financial advice diye:\n\n"
+            f"Stock: {row.get('Stock')}\n"
+            f"Close: {row.get('Close')}, EMA20: {row.get('EMA20')}, EMA50: {row.get('EMA50')}, EMA200: {row.get('EMA200')}\n"
+            f"RSI: {row.get('RSI')}, MACD: {row.get('MACD')} vs Signal: {row.get('MACD_SIGNAL')}\n"
+            f"ADX: {row.get('ADX')}, Supertrend: {row.get('Supertrend')}\n"
+            f"Volume Spike: {row.get('Volume_Spike')}, Breakout: {row.get('Breakout')}\n"
+            f"Support: {row.get('Support')}, Resistance: {row.get('Resistance')}\n"
+            f"Score: {row.get('Score')}/100, Signal: {row.get('Signal')}"
         )
 
-        # V9.1.1: glm_retry.call_glm_with_retry() — exponential backoff on
-        # 429 + 2s rate limiter. Pehle raw requests.post tha jo 429 par
-        # directly fail ho jaata tha (500-stock scan mein rate-limit common).
-        from glm_retry import call_glm_with_retry
-
-        url = f"{ZAI_API_BASE.rstrip('/')}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {ZAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": ZAI_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 300,
-            "temperature": 0.7,
-        }
-
-        text = call_glm_with_retry(url, headers, payload, timeout=30)
-        if not text:
-            logger.warning(f"{row['Stock']}: GLM API fail (429/5xx after retries ya client error), rule-based use kar raha hoon")
-            return _rule_based_analysis(row)
-
-        return text
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        
+        if response and response.text:
+            return response.text.strip()
+        else:
+            raise ValueError("Empty response from Gemini")
 
     except Exception as e:
         logger.warning(
-            f"{row['Stock']}: GLM API analysis fail hui ({e}), rule-based analysis use kar raha hoon"
+            f"{row.get('Stock')}: Gemini API analysis fail hui ({e}), Rule-Based analysis use kar raha hoon"
         )
         return _rule_based_analysis(row)
 
@@ -162,31 +133,15 @@ def _glm_api_analysis(row):
 def generate_analysis(row):
     """
     Row ke basis par analysis text generate karta hai.
-    - AI_MODE="RULE_BASED" -> free templated analysis
-    - AI_MODE="GLM_API"    -> top-signal stocks ke liye Z.AI GLM API,
-                              baaki rule-based
-    - AI_MODE="CLAUDE_API" -> (deprecated alias) GLM_API jaisa behave karega
     """
-    # Backward-compat: purana CLAUDE_API mode naam bhi accept karo
-    effective_mode = AI_MODE
-    if effective_mode == _CLAUDE_MODE_ALIAS:
-        logger.warning(
-            "AI_MODE='CLAUDE_API' deprecated hai (V8.2.0 mein Claude hata diya gaya). "
-            "Ab Z.AI GLM API use hota hai. config.py mein AI_MODE='GLM_API' set karo."
-        )
-        effective_mode = "GLM_API"
-
-    if effective_mode == "GLM_API":
-        if not ZAI_API_KEY:
+    if AI_MODE in ["GEMINI_API", "GLM_API"]:
+        if not GEMINI_API_KEY or not GEMINI_AVAILABLE:
             logger.warning(
-                "AI_MODE=GLM_API hai lekin ZAI_API_KEY set nahi - rule-based mode use ho raha hai. "
-                "Z.AI se API key lo (https://z.ai) aur .env mein ZAI_API_KEY=<key> daalo."
+                "GEMINI_API_KEY missing ya package install nahi. Rule-Based mode use ho raha hai."
             )
             return _rule_based_analysis(row)
 
-        if row["Signal"] in GLM_API_ONLY_FOR_SIGNALS:
-            return _glm_api_analysis(row)
-
-        return _rule_based_analysis(row)
+        if row.get("Signal") in GEMINI_API_ONLY_FOR_SIGNALS:
+            return _gemini_api_analysis(row)
 
     return _rule_based_analysis(row)
